@@ -1,6 +1,8 @@
 #MIT License
 
-#Copyright (c) 2022 ACRF Image X Institute
+#Copyright (c) 2022 The University of Sydney
+
+#Author: Youssef Ben Bouchta
 
 #Permission is hereby granted, free of charge, to any person obtaining a copy
 #of this software and associated documentation files (the "Software"), to deal
@@ -20,7 +22,7 @@
 #OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 #SOFTWARE.
 
-#Author: Youssef Ben Bouchta
+
 
 import pyrealsense2 as rs2
 import open3d as o3d
