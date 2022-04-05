@@ -1,9 +1,11 @@
 # SpyGRT
 
-Complete toolkit that: 
-- Operates the depth camera (current model is Intel Realsense D415)
-- Calibrates multiple cameras into the same external frame of reference
-- Tracks motion using a modified ICP workflow 
+SpyGRT, or Surface Guided Radiotherapy Toolkit in Python is a toolkit that allows fast development of novel surface guidance applications for radiotherapy. 
+
+SpyGRT allows easy: 
+- Operation of the depth camera (current model is Intel Realsense D415)
+- Calibration of multiple cameras into the same external frame of reference
+- Tracking of motion using an ICP workflow 
 
 ## Getting Started
 
