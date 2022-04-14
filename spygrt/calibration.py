@@ -26,9 +26,8 @@ import cv2 as cv
 import pyrealsense2 as rs2
 import open3d as o3d
 import numpy as np
-from  spygrt.stream import Camera, NoMoreFrames
-import os
-import sys
+from  spygrt.stream import NoMoreFrames
+
 
 
 # Modify this if using a calibration board other than the default one available 	
@@ -212,18 +211,6 @@ class Calibrator:
 
 #Helper functions
 
-def align_points(source, target):
-	"""Finds the affine transform that best aligns two sets of 3D points"""
-	s_corners = o3d.core.Tensor(source, dtype = o3d.core.Dtype.Float32)
-	t_corners = o3d.core.Tensor(target, dtype = o3d.core.Dtype.Float32)
-	s_pcd = o3d.t.geometry.PointCloud(s_corners).to_legacy()
-	t_pcd = o3d.t.geometry.PointCloud(t_corners).to_legacy()
-	corr = np.zeros((col*rows,2))
-	corr[:, 0] = np.arange(0,len(source))
-	corr[:, 1] = np.arange(0,len(target))
-	icp = o3d.pipelines.registration.TransformationEstimationPointToPoint()
-	return icp.compute_transformation(s_pcd,t_pcd,o3d.utility.Vector2iVector(corr))
-
 def to_affine(R,T):
 	"""Transforms a 3x3 rotation matrix and a Translation vector to an Affine transformation matrix."""
 	return np.vstack((np.vstack((R.T,T)).T,[0,0,0,1]))
@@ -255,20 +242,3 @@ def ms3Dline(points):
 		axis = axis * -1
 	
 	return axis
-
-def rs_main():
-	ctx = rs2.context()
-	calibs = []
-	for dev in ctx.query_devices():
-		calibs.append(Calibrator_rs2(Camera(dev)))
-		calibs[-1].align_to_board()
-		calibs[-1].write_cal()
-	print('Done')
-	
-	
-def main():
-	rs_main()
-
-
-if __name__ == "__main__":
-	main()

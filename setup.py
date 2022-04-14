@@ -1,13 +1,20 @@
 from distutils.core import setup
 
 setup(
-    name='SpyGRT',
-    version='0.1',
-    author='Youssef Ben Bouchta',
+    name ='SpyGRT',
+    packages = ['spygrt'],
+    version ='0.1',
+    license = 'MIT',
+    description = 'Toolkit to build SGRT applications',
+    author = 'Youssef Ben Bouchta',
     author_email='youssef.benbouchta@sydney.edu.au',
-    description='Surface guidance in RT code',
-    packages=['spygrt'],
-    license='MIT',
-    install_requires=['opencv-python', 'pyrealsense2', 'open3d', 'numpy'],
+    url = 'https://github.com/ACRF-Image-X-Institute/SpyGRT',
+    download_url = 'https://github.com/ACRF-Image-X-Institute/SpyGRT/archive/refs/tags/v_01.tar.gz',
+    keywords = ['radiotherapy', 'realsense', 'SGRT', 'radiation-oncology'],
+    install_requires=['opencv-python', 
+                      'pyrealsense2', 
+                      'open3d', 
+                      'numpy'],
+    
     long_description=open('README.md').read(),
 )
