@@ -60,7 +60,9 @@ class Calibrator:
 		np.savetxt(filename,self.T.numpy())
 
 	def get_corners(self):
-		"""Get the 3D coordinate of cordinate in the lab frame of reference."""
+		"""Get the 3D coordinate of cordinate in the frame of reference of the 
+        current Calibrator object.
+        """
 		corners = np.vstack((self.corners.T,np.ones(len(self.corners)))).T
 		corners = self.T.numpy()@corners.T
 		return corners[0:3].T
