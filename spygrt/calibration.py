@@ -100,13 +100,22 @@ class Calibrator:
 		self.pcd = o3d.t.geometry.PointCloud.from_legacy(pcd)
 
 	def find_corners3D(self,col=DEFAULT_COLUMN, rows=DEFAULT_ROW, draw = True):
-		"""Identify the 3D coordinates of the corners of a chessboard in the current frame"""
+		"""Identify the 3D coordinates in the camera frame of reference 
+        of the corners of a chessboard in the current frame.
+        """
 		corners = np.asarray([])
 		ret, corners = cv.findChessboardCorners(self.color.as_tensor().numpy(),[col,rows],corners,cv.CALIB_CB_FAST_CHECK)
 		corners3d = []
-		for corner in corners:
-			pixel = [int(np.rint(corner[0][1])),int(np.rint(corner[0][0]))]
-			corners3d.append(rs2.rs2_deproject_pixel_to_point(self.sensor.intrinsics,corner[0],float(self.depth.as_tensor().numpy()[pixel[0],pixel[1]])))
+		try:
+			for corner in corners:
+				pixel = [int(np.rint(corner[0][1])),int(np.rint(corner[0][0]))]
+				corners3d.append(rs2.rs2_deproject_pixel_to_point(self.sensor.intrinsics,corner[0],float(self.depth.as_tensor().numpy()[pixel[0],pixel[1]])))
+		except TypeError:
+			try:
+				self.refresh()
+				return self.find_corners3D()
+			except NoMoreFrames:
+				return False
 
 		#Rescaling the corners to have coordinate in meters
 		corners3d = np.asarray(corners3d) * 65535/1000
