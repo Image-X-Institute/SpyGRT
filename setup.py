@@ -1,10 +1,15 @@
-from distutils.core import setup
+from setuptools import setup
+import re, io
 
+__version__ = re.search(
+    r'__version__\s*=\s*[\'"]([^\'"]*)[\'"]',  # It excludes inline comment too
+    io.open('spygrt/__init__.py', encoding='utf_8_sig').read()
+    ).group(1)
 setup(
     name ='SpyGRT',
     python_requires = '>=3.7, <=3.9',
     packages = ['spygrt'],
-    version ='0.1',
+    version = __version__,
     license = 'MIT',
     description = 'Toolkit to build SGRT applications',
     author = 'Youssef Ben Bouchta',
