@@ -2,6 +2,7 @@ from distutils.core import setup
 
 setup(
     name ='SpyGRT',
+    python_requires = '>=3.7, <=3.9',
     packages = ['spygrt'],
     version ='0.1',
     license = 'MIT',

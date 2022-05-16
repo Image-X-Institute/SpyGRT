@@ -5,3 +5,5 @@ __pycache__/*
 /spygrt/__pycache__/*
 /Examples/.ipynb_checkpoints/*
 Examples/.ipynb_checkpoints/CalibrationExample-checkpoint.ipynb
+/dist/*
+/.idea/*
