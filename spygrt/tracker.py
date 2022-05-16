@@ -22,14 +22,17 @@
 #OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 #SOFTWARE.
 
+import cv2 as cv
+import pyrealsense2 as rs2
 import open3d as o3d
 import numpy as np
 from  spygrt.stream import NoMoreFrames
+import os
 import sys
 
 
 # Modify with path to calibration files
-CALIBRATION_FOLDER = ''
+CALIBRATION_FOLDER = '../Calibrations/'
 
 class Tracker():
 	"""Class to handle surface tracking"""
