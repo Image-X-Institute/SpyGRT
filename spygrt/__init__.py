@@ -4,4 +4,4 @@ surface guidance applications for radiotherapy.
 """
 
 __author__ = 'Youssef Ben Bouchta'
-__version = '0.1.0'
+__version__ = '0.1.0'
