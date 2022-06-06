@@ -1,6 +1,6 @@
-pyrealsense2 == 2.50.0
+pyrealsense2 => 2.50.0
 
-opencv-python == 4.5.1
+opencv-python => 4.5.1
 
 open3d == 0.15.1
 
