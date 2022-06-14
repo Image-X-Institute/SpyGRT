@@ -33,7 +33,7 @@ from  spygrt.stream import NoMoreFrames
 # Modify this if using a calibration board other than the default one available 	
 DEFAULT_ROW = 5
 DEFAULT_COLUMN = 8
-DEFAULT_SQUARE_SIZE = 0.043
+DEFAULT_SQUARE_SIZE = 0.044
 
 class Calibrator:
 	"""Class to contain and perform the calibration of a camera to a predetermined frame of reference or to that of a different camera."""
