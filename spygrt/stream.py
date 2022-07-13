@@ -22,11 +22,20 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-
+import logging
 import pyrealsense2 as rs2
 import open3d as o3d
 import numpy as np
 from abc import ABC, abstractmethod
+
+
+# Setting up a logger that will write log messages in the 'stream.log' file.
+logger = logging.getLogger(__name__)
+fh = logging.FileHandler('stream.log', 'w', 'utf-8')
+fh.setLevel(logging.DEBUG)
+formatter = logging.Formatter('- %(module)s - %(levelname)-8s: %(message)s')
+fh.setFormatter(formatter)
+logger.addHandler(fh)
 
 
 class NoMoreFrames(Exception):
@@ -47,22 +56,187 @@ class StreamNew(ABC):
     def end_stream(self):
         pass
 
+    @property
     @abstractmethod
-    def _get_config(self):
+    def frame(self):
         pass
+
+    @frame.setter
+    def frame(self, new_frame):
+        """
+        Ensures that the frame attribute is only modified by fetching a new frame from the camera.
+
+        Args:
+            new_frame: New frame to replace existing frame.
+        """
+        logging.warning('Manually setting the \'frame\' attribute is not allowed.')
 
 
 class CameraNew(StreamNew):
     """Class to handle the interaction with the Realsense API for real-time frame capture"""
 
     def __init__(self, device):
-        """Initialise the camera settings and start the stream."""
+        """
+        Initialise the camera settings and start the stream.
+
+        Args:
+            device: Realsense device object pointing to a camera(rs2.device).
+        """
+        self._frame = None
+
+        # Initialise serial number early as it is needed for Stream configuration
+        self.serial = device.get_info(rs2.camera_info.serial_number)
+
+        # Indicate whether the camera has warmed up. If false, need to leave the camera running
+        # for 10-15frames before any get_frames can be used.
+        self.warmed = False
 
         # pipeline that controls the acquisition of frames.
         self.__pipe = rs2.pipeline()
 
         # Initialise config object
-        cfg = self._get_config(device)
+        cfg = rs2.config()
+
+        # Configure the camera with the default setting.
+        cfg.enable_device(self.serial)
+
+        # Configure stream format (resolution, frame rate, etc.)
+        # NEED TO TEST TO ENSURE L515 COMPATIBILITY
+        cfg.enable_stream(rs2.stream.color, 1280, 720, rs2.format.rgb8, 30)
+        cfg.enable_stream(rs2.stream.depth, 1280, 720, rs2.format.z16, 30)
+
+        # Start the pipeline - Frame fetching is possible after this.
+        pipe_profile = self.__pipe.start(cfg)
+
+        # Object that align depth and color.
+        self.__align_to_color = rs2.align(rs2.stream.color)
+
+        # Device object to access metadata.
+        self.__device = pipe_profile.get_device()
+
+        # Model of the camera that captured this stream.
+        self.model = self.__device.get_info(rs2.camera_info.name)
+
+        depth_sensor = device.first_depth_sensor()
+
+        self.depthScale = depth_sensor.get_depth_scale()
+
+        # Internal variable to ensure the first frame isn't lost.
+        self.__first = True
+
+        # Pinhole camera intrinsics for depth camera
+        self.intrinsics = depth_sensor.get_stream_profiles()[0].as_video_stream_profile().intrinsics
+
+        if depth_sensor.supports(rs2.option.emitter_enabled):
+            depth_sensor.set_option(rs2.option.emitter_enabled, True)
+
+        if depth_sensor.supports(rs2.option.laser_power):
+            laser = depth_sensor.get_option_range(rs2.option.laser_power)
+            depth_sensor.set_option(rs2.option.laser_power, laser.max)
+
+        try:
+            depth_sensor.set_option(rs2.option.max_distance, 200)
+        except RuntimeError:
+            print("no maximum distance setting for camera model: " + self.model)
+
+        try:
+            depth_sensor.set_option(rs2.option.min_distance, 0)
+        except RuntimeError:
+            print("no minimum distance setting for camera model: " + self.model)
+
+            # Warmup
+            self.warmup()
+
+    @property
+    def frame(self):
+        """
+        Access the last frame.
+
+        Returns:
+            frame: A tuple containing the last frame ordered (depth, colour)
+
+        """
+        if self._frame is None:
+            self._frame = self.get_frames()
+        return self._frame
+
+    # Encoding will be deprecated later, for now used for backward compatibility
+    def get_frames(self, encoding='o3d'):
+        """
+        Fetch an aligned depth and color frame.
+
+        Args:
+            encoding: a flag that determines the type of the returned frame.
+
+        Returns:
+            frame: a tuple with a depth and colour frame ordered (depth, colour). The type of the returned
+        frames depend on the input value for encoding.
+
+        """
+        """"""
+        if not self.warmed:
+            self.warmup()
+        frames = self.__pipe.wait_for_frames()
+        aligned_frames = self.__align_to_color.process(frames)
+        rs_depth = aligned_frames.get_depth_frame()
+        rs_color = aligned_frames.get_color_frame()
+
+        if encoding is 'o3d':
+            np_depth = np.float32(rs_depth.get_data()) * 1 / 65535
+            np_color = np.asanyarray(rs_color.get_data())
+
+            depth = o3d.t.geometry.Image(o3d.core.Tensor(np_depth))
+            color = o3d.t.geometry.Image(o3d.core.Tensor(np_color))
+            self._frame = (depth, color)
+
+        else:
+            self._frame = (rs_depth, rs_color)
+        return self._frame
+
+    def end_stream(self):
+        """End the stream."""
+        self.__pipe.stop()
+
+    def warmup(self):
+        """"Warmup the camera before frame acquisition"""
+        frames = self.__pipe.wait_for_frames()
+        for i in range(29):
+            frames = self.__pipe.wait_for_frames()
+        self.warmed = True
+        self.__first = False
+        self.intrinsics = frames.get_depth_frame().get_profile().as_video_stream_profile().intrinsics
+
+    # Will be deprecated for using the intrinsics parameter.
+    def o3d_intrinsics(self):
+        """
+        Transform the camera intrinsics to an open_3D format.
+
+         Returns:
+            intrinsics: Return the intrinsics of the camera in an open3D format.
+        """
+        return o3d.camera.PinholeCameraIntrinsic(self.intrinsics.width, self.intrinsics.height, self.intrinsics.fx,
+                                                 self.intrinsics.fy, self.intrinsics.ppx, self.intrinsics.ppy)
+
+
+class RecordingNew(StreamNew):
+    """Class to handle the interaction with the Realsense API for realsense bag files."""
+
+    def __init__(self, device):
+        """
+
+        Args:
+            device: link to a bag file containing a recording.
+        """
+        self._frame = None
+
+        # pipeline that controls the acquisition of frames.
+        self.__pipe = rs2.pipeline()
+
+        # Initialise config object
+        cfg = rs2.config()
+
+        # Configure the camera with the default setting.
+        cfg.enable_device_from_file(device, False)
 
         # Start the pipeline - Frame fetching is possible after this.
         pipe_profile = self.__pipe.start(cfg)
@@ -81,50 +255,53 @@ class CameraNew(StreamNew):
 
         # Access unit in which the depth is saved
         depth_sensor = self.__device.first_depth_sensor()
-        self.depth_scale = depth_sensor.get_depth_scale()
+
+        self.depthScale = depth_sensor.get_depth_scale()
 
         # Internal variable to ensure the first frame isn't lost.
         self.__first = True
-        # Set up the intrinsics.
-        self.frame = self.get_frames()
 
         # Pinhole camera intrinsics for depth camera
         self.intrinsics = depth_sensor.get_stream_profiles()[0].as_video_stream_profile().intrinsics
 
-        # Initialise serial number early as it is needed for Stream configuration
-        self.serial = device.get_info(rs2.camera_info.serial_number)
+        # Specify that this device is from a captured stream
+        self.__playback = self.__device.as_playback()
 
-        # Indicate whether the camera has warmed up. If false, need to leave the camera running
-        # for 10-15frames before any get_frames can be used.
-        self.warmed = False
+        # Enable frame by frame access
+        self.__playback.set_real_time(False)
 
-        # Set up for the optical settings of the camera.
-        if depth_sensor.supports(rs2.option.emitter_enabled):
-            depth_sensor.set_option(rs2.option.emitter_enabled, True)
+    @property
+    def frame(self):
+        """
+        Access the last frame.
 
-        if depth_sensor.supports(rs2.option.laser_power):
-            laser = depth_sensor.get_option_range(rs2.option.laser_power)
-            depth_sensor.set_option(rs2.option.laser_power, laser.max)
+        Returns:
+            frame: A tuple containing the last frame ordered (depth, colour)
 
-        try:
-            depth_sensor.set_option(rs2.option.max_distance, 200)
-        except:  # Need to double check which exception this creates and handle it.
-            print("no maximum distance setting for camera model: " + self.model)
+        """
+        if self._frame is None:
+            self._frame = self.get_frames()
+        return self._frame
 
-        try:
-            depth_sensor.set_option(rs2.option.min_distance, 0)
-        except:  # Need to double check which exception this creates and handle it.
-            print("no minimum distance setting for camera model: " + self.model)
-
-        # Warmup
-        self.warmup()
-
-    # Encoding will be deprecated later, for now used for backward compatibility
     def get_frames(self, encoding='o3d'):
-        """Fetch an aligned depth and color frame"""
+        """
+        Fetch a new set of depth and colour frame.
 
-        if not self.warmed:
-            self.warmup()
+        Args:
+            encoding: a flag that determines the type of the returned frame.
+        Returns:
+            frame: a tuple with a depth and colour frame ordered (depth, colour). The type of the returned
+        frames depend on the input value for encoding.
+
+        """
+        try:
+            if not self.__playback.current_status() == rs2.playback_status.stopped and self._frame is None:
+                pass
+            elif self.__playback.current_status() == rs2.playback_status.stopped:
+                raise NoMoreFrames("Reached the end of the stream")
+        except AttributeError:
+            pass
+
         frames = self.__pipe.wait_for_frames()
         aligned_frames = self.__align_to_color.process(frames)
         rs_depth = aligned_frames.get_depth_frame()
@@ -136,38 +313,24 @@ class CameraNew(StreamNew):
 
             depth = o3d.t.geometry.Image(o3d.core.Tensor(np_depth))
             color = o3d.t.geometry.Image(o3d.core.Tensor(np_color))
-            self.frame = (depth, color)
-
+            self._frame = (depth, color)
         else:
-            self.frame = (rs_depth, rs_color)
-        return self.frame
+            self._frame = (rs_depth, rs_color)
 
-    def _get_config(self):
-        """Set up configuration for the stream."""
-        cfg = rs2.config()
-        # Configure the camera with the default setting.
-        cfg.enable_device(self.serial)
-
-        # NEED TO TEST TO ENSURE L515 COMPATIBILITY
-        cfg.enable_stream(rs2.stream.color, 1280, 720, rs2.format.rgb8, 30)  # Fails for L515 (possibly due to USB)
-        cfg.enable_stream(rs2.stream.depth, 1280, 720, rs2.format.z16, 30)  # Fails for L515 (possibly due to USB)
-        return cfg
+        self._frame = (depth, color)
+        return self._frame
 
     def end_stream(self):
         """End the stream."""
         self.__pipe.stop()
 
-    def warmup(self):
-        """"Warmup the camera before frame acquisition"""
-        for i in range(30):
-            frames = self.__pipe.wait_for_frames()
-        self.warmed = True
-        self.__first = False
-        self.intrinsics = frames.get_depth_frame().get_profile().as_video_stream_profile().intrinsics
+    def o3d_intrinsics(self):
+        """
+        Transform the camera intrinsics to an open_3D format.
 
-    # Will be deprecated for using the intrinsics parameter.
-    def get_o3d_intrinsics(self):
-        """Transform the camera intrinsics to an open_3D format."""
+        Returns:
+            intrinsics: Return the intrinsics of the camera in an open3D format.
+        """
         return o3d.camera.PinholeCameraIntrinsic(self.intrinsics.width, self.intrinsics.height, self.intrinsics.fx,
                                                  self.intrinsics.fy, self.intrinsics.ppx, self.intrinsics.ppy)
 
@@ -250,7 +413,7 @@ class Recording(Stream):
 
         Stream.__init__(self, bag_file)
 
-        # Specificy that this device is from a captured stream
+        # Specify that this device is from a captured stream
         self.__playback = self._Stream__device.as_playback()
 
         # Enable frame by frame access

@@ -4,4 +4,4 @@ opencv-python => 4.5.1
 
 open3d == 0.15.1
 
-numpy 1.18.1
+numpy => 1.18.1
