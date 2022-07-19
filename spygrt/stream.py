@@ -26,6 +26,7 @@ import logging
 import pyrealsense2 as rs2
 import open3d as o3d
 import numpy as np
+import time
 from abc import ABC, abstractmethod
 
 
@@ -52,16 +53,13 @@ class StreamNew(ABC):
     def get_frames(self):
         pass
 
-    @abstractmethod
-    def end_stream(self):
-        pass
-
     @property
     @abstractmethod
     def frame(self):
         pass
 
     @frame.setter
+    @abstractmethod
     def frame(self, new_frame):
         """
         Ensures that the frame attribute is only modified by fetching a new frame from the camera.
@@ -70,6 +68,14 @@ class StreamNew(ABC):
             new_frame: New frame to replace existing frame.
         """
         logging.warning('Manually setting the \'frame\' attribute is not allowed.')
+
+    @abstractmethod
+    def end_stream(self):
+        pass
+
+    @abstractmethod
+    def start_stream(self):
+        pass
 
 
 class CameraNew(StreamNew):
@@ -92,37 +98,30 @@ class CameraNew(StreamNew):
         self.warmed = False
 
         # pipeline that controls the acquisition of frames.
-        self.__pipe = rs2.pipeline()
+        self._pipe = rs2.pipeline()
 
         # Initialise config object
-        cfg = rs2.config()
+        self._cfg = rs2.config()
 
         # Configure the camera with the default setting.
-        cfg.enable_device(self.serial)
+        self._cfg.enable_device(self.serial)
 
         # Configure stream format (resolution, frame rate, etc.)
         # NEED TO TEST TO ENSURE L515 COMPATIBILITY
-        cfg.enable_stream(rs2.stream.color, 1280, 720, rs2.format.rgb8, 30)
-        cfg.enable_stream(rs2.stream.depth, 1280, 720, rs2.format.z16, 30)
-
-        # Start the pipeline - Frame fetching is possible after this.
-        pipe_profile = self.__pipe.start(cfg)
+        self._cfg.enable_stream(rs2.stream.color, 1280, 720, rs2.format.rgb8, 30)
+        self._cfg.enable_stream(rs2.stream.depth, 1280, 720, rs2.format.z16, 30)
 
         # Object that align depth and color.
         self.__align_to_color = rs2.align(rs2.stream.color)
 
-        # Device object to access metadata.
-        self.__device = pipe_profile.get_device()
-
         # Model of the camera that captured this stream.
-        self.model = self.__device.get_info(rs2.camera_info.name)
+        self.model = device.get_info(rs2.camera_info.name)
 
+        # Depth sensor object to access the depth scale
         depth_sensor = device.first_depth_sensor()
 
+        # Depth Scale, indicating to convert the data to realworld distances
         self.depthScale = depth_sensor.get_depth_scale()
-
-        # Internal variable to ensure the first frame isn't lost.
-        self.__first = True
 
         # Pinhole camera intrinsics for depth camera
         self.intrinsics = depth_sensor.get_stream_profiles()[0].as_video_stream_profile().intrinsics
@@ -176,7 +175,7 @@ class CameraNew(StreamNew):
         """"""
         if not self.warmed:
             self.warmup()
-        frames = self.__pipe.wait_for_frames()
+        frames = self._pipe.wait_for_frames()
         aligned_frames = self.__align_to_color.process(frames)
         rs_depth = aligned_frames.get_depth_frame()
         rs_color = aligned_frames.get_color_frame()
@@ -193,17 +192,12 @@ class CameraNew(StreamNew):
             self._frame = (rs_depth, rs_color)
         return self._frame
 
-    def end_stream(self):
-        """End the stream."""
-        self.__pipe.stop()
-
     def warmup(self):
         """"Warmup the camera before frame acquisition"""
-        frames = self.__pipe.wait_for_frames()
+        frames = self._pipe.wait_for_frames()
         for i in range(29):
-            frames = self.__pipe.wait_for_frames()
+            frames = self._pipe.wait_for_frames()
         self.warmed = True
-        self.__first = False
         self.intrinsics = frames.get_depth_frame().get_profile().as_video_stream_profile().intrinsics
 
     # Will be deprecated for using the intrinsics parameter.
@@ -216,6 +210,34 @@ class CameraNew(StreamNew):
         """
         return o3d.camera.PinholeCameraIntrinsic(self.intrinsics.width, self.intrinsics.height, self.intrinsics.fx,
                                                  self.intrinsics.fy, self.intrinsics.ppx, self.intrinsics.ppy)
+
+    def end_stream(self):
+        """End the stream."""
+        self._pipe.stop()
+        self.warmed = False
+
+    def start_stream(self, rec=False, filename=None):
+        """
+        Starts or restarts the stream.
+
+        Args:
+            rec: Bool to indicate whether a recording should be created
+            filename: filepath to the desired location for the recorded file.
+
+        """
+        if rec is True:
+            if filename is None:
+                filename = self.serial + time.localtime() + '.bag'
+            else:
+                try:
+                    if filename[-4:] != '.bag':
+                        filename = filename + '.bag'
+                except TypeError:
+                    logging.warning('filename is not a string, using default filename instead')
+                    filename = self.serial + time.localtime() + '.bag'
+            self._cfg.enable_record_to_file(filename)
+
+        self._pipe.start(self._cfg)
 
 
 class RecordingNew(StreamNew):
@@ -230,45 +252,42 @@ class RecordingNew(StreamNew):
         self._frame = None
 
         # pipeline that controls the acquisition of frames.
-        self.__pipe = rs2.pipeline()
+        self._pipe = rs2.pipeline()
 
         # Initialise config object
-        cfg = rs2.config()
+        self._cfg = rs2.config()
 
         # Configure the camera with the default setting.
-        cfg.enable_device_from_file(device, False)
+        self._cfg.enable_device_from_file(device, False)
 
         # Start the pipeline - Frame fetching is possible after this.
-        pipe_profile = self.__pipe.start(cfg)
+        pipe_profile = self._pipe.start(self._cfg)
 
         # Object that align depth and color.
-        self.__align_to_color = rs2.align(rs2.stream.color)
+        self._align_to_color = rs2.align(rs2.stream.color)
 
         # Device object to access metadata.
-        self.__device = pipe_profile.get_device()
+        self._device = pipe_profile.get_device()
 
         # Serial number of the camera that captured this stream.
-        self.serial = self.__device.get_info(rs2.camera_info.serial_number)
+        self.serial = self._device.get_info(rs2.camera_info.serial_number)
 
         # Model of the camera that captured this stream.
-        self.model = self.__device.get_info(rs2.camera_info.name)
+        self.model = self._device.get_info(rs2.camera_info.name)
 
         # Access unit in which the depth is saved
-        depth_sensor = self.__device.first_depth_sensor()
+        depth_sensor = self._device.first_depth_sensor()
 
         self.depthScale = depth_sensor.get_depth_scale()
-
-        # Internal variable to ensure the first frame isn't lost.
-        self.__first = True
 
         # Pinhole camera intrinsics for depth camera
         self.intrinsics = depth_sensor.get_stream_profiles()[0].as_video_stream_profile().intrinsics
 
         # Specify that this device is from a captured stream
-        self.__playback = self.__device.as_playback()
+        self._playback = self._device.as_playback()
 
         # Enable frame by frame access
-        self.__playback.set_real_time(False)
+        self._playback.set_real_time(False)
 
     @property
     def frame(self):
@@ -295,15 +314,15 @@ class RecordingNew(StreamNew):
 
         """
         try:
-            if not self.__playback.current_status() == rs2.playback_status.stopped and self._frame is None:
+            if not self._playback.current_status() == rs2.playback_status.stopped and self._frame is None:
                 pass
-            elif self.__playback.current_status() == rs2.playback_status.stopped:
+            elif self._playback.current_status() == rs2.playback_status.stopped:
                 raise NoMoreFrames("Reached the end of the stream")
         except AttributeError:
             pass
 
-        frames = self.__pipe.wait_for_frames()
-        aligned_frames = self.__align_to_color.process(frames)
+        frames = self._pipe.wait_for_frames()
+        aligned_frames = self._align_to_color.process(frames)
         rs_depth = aligned_frames.get_depth_frame()
         rs_color = aligned_frames.get_color_frame()
 
@@ -317,12 +336,7 @@ class RecordingNew(StreamNew):
         else:
             self._frame = (rs_depth, rs_color)
 
-        self._frame = (depth, color)
         return self._frame
-
-    def end_stream(self):
-        """End the stream."""
-        self.__pipe.stop()
 
     def o3d_intrinsics(self):
         """
@@ -333,6 +347,21 @@ class RecordingNew(StreamNew):
         """
         return o3d.camera.PinholeCameraIntrinsic(self.intrinsics.width, self.intrinsics.height, self.intrinsics.fx,
                                                  self.intrinsics.fy, self.intrinsics.ppx, self.intrinsics.ppy)
+
+    def end_stream(self):
+        """End the stream."""
+        self._pipe.stop()
+
+    def start_stream(self):
+        """Starts or restarts the stream."""
+
+        if self._playback.current_status() != rs2.playback_status.stopped:
+            logging.warning('Tried to start a stream that is already started')
+            return
+
+        self._pipe.start(self._cfg)
+
+
 
 
 class Stream:
