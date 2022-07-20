@@ -43,7 +43,7 @@ class NoMoreFrames(Exception):
     pass
 
 
-class StreamNew(ABC):
+class Stream(ABC):
     """Abstract Parent Class to handle the interactions with the RealSense API"""
 
     def __init__(self):
@@ -78,7 +78,7 @@ class StreamNew(ABC):
         pass
 
 
-class CameraNew(StreamNew):
+class Camera(Stream):
     """Class to handle the interaction with the Realsense API for real-time frame capture"""
 
     def __init__(self, device):
@@ -240,7 +240,7 @@ class CameraNew(StreamNew):
         self._pipe.start(self._cfg)
 
 
-class RecordingNew(StreamNew):
+class Recording(Stream):
     """Class to handle the interaction with the Realsense API for realsense bag files."""
 
     def __init__(self, device):
@@ -364,7 +364,7 @@ class RecordingNew(StreamNew):
 
 
 
-class Stream:
+class Stream_old:
     """Parent Class to handle the interactions with the RealSense API"""
 
     def __init__(self, stream_origin):
@@ -434,16 +434,16 @@ class Stream:
         return rs2.config()
 
 
-class Recording(Stream):
+class Recording_old(Stream_old):
     """Class to handle the interaction with the Realsense API for realsense bag files"""
 
     def __init__(self, bag_file):
         """Initialise playback setting and start the stream"""
 
-        Stream.__init__(self, bag_file)
+        Stream_old.__init__(self, bag_file)
 
         # Specify that this device is from a captured stream
-        self.__playback = self._Stream__device.as_playback()
+        self.__playback = self._Stream_old__device.as_playback()
 
         # Enable frame by frame access
         self.__playback.set_real_time(False)
@@ -458,7 +458,7 @@ class Recording(Stream):
     def get_frames(self):
         """return an aligned depth and color frame"""
         try:
-            if not self.__playback.current_status() == rs2.playback_status.stopped and self._Stream__first:
+            if not self.__playback.current_status() == rs2.playback_status.stopped and self._Stream_old__first:
                 self._Stream__first = False
                 return self.frame
             elif self.__playback.current_status() == rs2.playback_status.stopped:
@@ -466,8 +466,8 @@ class Recording(Stream):
         except AttributeError:
             pass
 
-        frames = self._Stream__pipe.wait_for_frames()
-        aligned_frames = self._Stream__align_to_color.process(frames)
+        frames = self._Stream_old_pipe.wait_for_frames()
+        aligned_frames = self._Stream_old__align_to_color.process(frames)
         rs_depth = aligned_frames.get_depth_frame()
         rs_color = aligned_frames.get_color_frame()
 
@@ -484,7 +484,7 @@ class Recording(Stream):
         return self.frame
 
 
-class Camera(Stream):
+class Camera(Stream_old):
     """Class to handle the interaction with the Realsense API for real-time frame capture"""
 
     def __init__(self, device):
@@ -497,9 +497,9 @@ class Camera(Stream):
         # for 10-15frames before any get_frames can be used.
         self.warmedup = False
 
-        Stream.__init__(self, device)
+        Stream_old.__init__(self, device)
 
-        depth_sensor = self._Stream__device.first_depth_sensor()
+        depth_sensor = self._Stream_old__device.first_depth_sensor()
 
         if depth_sensor.supports(rs2.option.emitter_enabled):
             depth_sensor.set_option(rs2.option.emitter_enabled, True)
@@ -524,7 +524,7 @@ class Camera(Stream):
     def warmup(self):
         """Warmup the camera before frame acquisition"""
         for i in range(30):
-            frames = self._Stream__pipe.wait_for_frames()
+            frames = self._Stream_old__pipe.wait_for_frames()
         self.warmedup = True
         self._Stream__first = False
         self.intrinsics = frames.get_depth_frame().get_profile().as_video_stream_profile().intrinsics
@@ -534,8 +534,8 @@ class Camera(Stream):
 
         if not self.warmedup:
             self.warmup()
-        frames = self._Stream__pipe.wait_for_frames()
-        aligned_frames = self._Stream__align_to_color.process(frames)
+        frames = self._Stream_old__pipe.wait_for_frames()
+        aligned_frames = self._Stream_old__align_to_color.process(frames)
         rs_depth = aligned_frames.get_depth_frame()
         rs_color = aligned_frames.get_color_frame()
 
