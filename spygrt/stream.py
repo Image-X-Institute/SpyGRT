@@ -136,12 +136,12 @@ class Camera(Stream):
         try:
             depth_sensor.set_option(rs2.option.max_distance, 200)
         except RuntimeError:
-            print("no maximum distance setting for camera model: " + self.model)
+            logging.info("no maximum distance setting for camera model: " + self.model)
 
         try:
             depth_sensor.set_option(rs2.option.min_distance, 0)
         except RuntimeError:
-            print("no minimum distance setting for camera model: " + self.model)
+            logging.info("no minimum distance setting for camera model: " + self.model)
 
             # Warmup
             self.warmup()
