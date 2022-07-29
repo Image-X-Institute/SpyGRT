@@ -46,7 +46,8 @@ class NoMoreFrames(Exception):
 class Stream(ABC):
     """Abstract Parent Class to handle the interactions with the RealSense API"""
 
-    def __init__(self):
+    @abstractmethod
+    def __init__(self, stream_source):
         """Initialise stream and define stream settings."""
 
     @abstractmethod
@@ -54,12 +55,10 @@ class Stream(ABC):
         pass
 
     @property
-    @abstractmethod
     def frame(self):
         pass
 
     @frame.setter
-    @abstractmethod
     def frame(self, new_frame):
         """
         Ensures that the frame attribute is only modified by fetching a new frame from the camera.
@@ -289,6 +288,10 @@ class Recording(Stream):
         # Enable frame by frame access
         self._playback.set_real_time(False)
 
+        # Pause to allow for the playback to update.
+        time.sleep(0.0001)
+        self._pipe.stop()
+
     @property
     def frame(self):
         """
@@ -322,7 +325,12 @@ class Recording(Stream):
             pass
 
         frames = self._pipe.wait_for_frames()
-        aligned_frames = self._align_to_color.process(frames)
+        time.sleep(0.0001)
+        try:
+            aligned_frames = self._align_to_color.process(frames)
+        except RuntimeError:
+            self._align_to_color = rs2.align(rs2.stream.color)
+            aligned_frames = self._align_to_color.process(frames)
         rs_depth = aligned_frames.get_depth_frame()
         rs_color = aligned_frames.get_color_frame()
 
@@ -357,14 +365,192 @@ class Recording(Stream):
 
         if self._playback.current_status() != rs2.playback_status.stopped:
             logging.warning('Tried to start a stream that is already started')
-            return
-
+            return self._playback
         self._pipe.start(self._cfg)
 
 
+class DualStream(Stream, ABC):
+    """ Abstract class to handle a stream from two devices (2 cameras or 2 recordings)."""
+
+    @abstractmethod
+    def __init__(self, stream1, stream2):
+        """ Initialise the dual stream."""
+
+    @abstractmethod
+    def get_frames(self):
+        pass
+
+    @property
+    @abstractmethod
+    def frame(self):
+        pass
+
+    @frame.setter
+    def frame(self, new_frame):
+        """
+            Ensures that the frame attribute is only modified by fetching a new frame from the camera.
+
+            Args:
+                new_frame: New frame to replace existing frame.
+        """
+        logging.warning('Manually setting the \'frame\' attribute is not allowed.')
+
+    @property
+    @abstractmethod
+    def stream1(self):
+        pass
+
+    @stream1.setter
+    def stream1(self, new_stream):
+        """
+            Ensures that the stream is only set during initialization.
+        Args:
+            new_stream: New stream to replace the existing stream1.
+        """
+        logging.warning('Tried to reset \'stream1\', stream attributes can only be set during initialization.')
+
+    @property
+    @abstractmethod
+    def stream2(self):
+        pass
+
+    @stream2.setter
+    def stream2(self, new_stream):
+        """
+            Ensures that the stream is only set during initialization.
+        Args:
+            new_stream: New stream to replace the existing stream1.
+        """
+        logging.warning('Tried to reset \'stream2\', stream attributes can only be set during initialization.')
+
+    @abstractmethod
+    def start_stream(self):
+        pass
+
+    @abstractmethod
+    def end_stream(self):
+        pass
 
 
-class Stream_old:
+class DualRecording(DualStream):
+    """Class to handle the interaction with the Realsense API when handling bag file recordings from 2 cameras."""
+
+    def __init__(self, stream1, stream2):
+        """
+        Initializes the DualRecording object by setting setting both stream property
+        Args:
+            stream1: First stream of the dual stream.
+            stream2: Second stream of the dual stream.
+        """
+        # Initialising frame attribute.
+        self._frame = None
+
+        # Check if input is a recording object or a filepath to a recording
+        if type(stream1) == Recording:
+            self._stream1 = stream1
+        else:
+            try:
+                self._stream1 = Recording(stream1)
+            except RuntimeError:
+                logging.error('Could not resolve the input for \'stream1\'.')
+                raise ValueError('Could not resolve the input for \'stream1\'.' )
+        if type(stream2) == Recording:
+            self._stream2 = stream2
+        else:
+            try:
+                self._stream2 = Recording(stream2)
+            except RuntimeError:
+                logging.error('Could not resolve the input for \'stream2\'.')
+                raise ValueError('Could not resolve the input for \'stream2\'.')
+
+        # Loading the calibrations for each stream.
+        # Calibrations are currently not used. Unclear if they will be used by this object in the future. As such
+        # this section will be commented out for now.
+        # try:
+        #
+        #     cal1 = np.loadtxt(stream1.serial + "_cal.txt")
+        # except OSError:
+        #     logging.warning('Could not load the calibration for camera: ' + stream1.serial)
+        #
+        # try:
+        #     cal2 = np.loadtxt(stream2.serial + "_cal.txt")
+        # except OSError:
+        #     logging.warning('Could not load the calibration for camera: ' + stream2.serial)
+
+    @property
+    def stream1(self):
+        """
+            Access the first stream.
+
+        Returns:
+            stream1: The first stream.
+
+        """
+        return self._stream1
+
+    @property
+    def stream2(self):
+        """
+            Access the second stream.
+
+        Returns:
+            stream2: The first stream.
+
+        """
+        return self._stream2
+
+    @property
+    def frame(self):
+        """
+        Access the last frame.
+
+        Returns:
+            frame: A tuple containing the last frame ordered (depth, colour)
+
+        """
+        if self._frame is None:
+            self._frame = self.get_frames()
+        return self._frame
+
+    def get_frames(self):
+        """
+            Fetch new frame and ensure temporal alignment.
+
+        Returns:
+            frame:Tuple containing two sets of (depth,colour) frames, 1 for each stream.
+
+        """
+
+        f1 = self._stream1.get_frames(encoding='rs')
+        f2 = self._stream2.get_frames(encoding='rs')
+        diff = f2[0].timestamp - f1[0].timestamp
+        while np.abs(diff) > 30:
+            if diff > 30:
+                f1 = self._stream1.get_frames(encoding='rs')
+                diff = f2[0].timestamp - f1[0].timestamp
+                continue
+            elif diff < -30:
+                f2 = self._stream2.get_frames(encoding='rs')
+                diff = f2[0].timestamp - f1[0].timestamp
+                continue
+
+        self._frame = (f1, f2)
+        return self._frame
+
+    def start_stream(self):
+        """Starts or restarts the stream by starting both stream1 and stream2."""
+
+        self._stream1.start_stream()
+        self._stream2.start_stream()
+
+    def end_stream(self):
+        """Ends the stream by ending both stream1 and stream2."""
+
+        self._stream1.end_stream()
+        self._stream2.end_stream()
+
+
+class StreamOld:
     """Parent Class to handle the interactions with the RealSense API"""
 
     def __init__(self, stream_origin):
@@ -403,6 +589,7 @@ class Stream_old:
         # Pinhole camera intrinsics for depth camera
         self.intrinsics = depth_sensor.get_stream_profiles()[0].as_video_stream_profile().intrinsics
 
+
     def get_frames(self):
         """Fetch an aligned depth and color frame."""
         frames = self.__pipe.wait_for_frames()
@@ -434,16 +621,16 @@ class Stream_old:
         return rs2.config()
 
 
-class Recording_old(Stream_old):
+class RecordingOld(StreamOld):
     """Class to handle the interaction with the Realsense API for realsense bag files"""
 
     def __init__(self, bag_file):
         """Initialise playback setting and start the stream"""
 
-        Stream_old.__init__(self, bag_file)
+        StreamOld.__init__(self, bag_file)
 
         # Specify that this device is from a captured stream
-        self.__playback = self._Stream_old__device.as_playback()
+        self.__playback = self._StreamOld__device.as_playback()
 
         # Enable frame by frame access
         self.__playback.set_real_time(False)
@@ -458,20 +645,20 @@ class Recording_old(Stream_old):
     def get_frames(self):
         """return an aligned depth and color frame"""
         try:
-            if not self.__playback.current_status() == rs2.playback_status.stopped and self._Stream_old__first:
-                self._Stream__first = False
+            if not self.__playback.current_status() == rs2.playback_status.stopped and self._StreamOld__first:
+                self._StreamOld__first = False
                 return self.frame
             elif self.__playback.current_status() == rs2.playback_status.stopped:
                 raise NoMoreFrames("Reached the end of the stream")
         except AttributeError:
             pass
 
-        frames = self._Stream_old_pipe.wait_for_frames()
-        aligned_frames = self._Stream_old__align_to_color.process(frames)
+        frames = self._StreamOld_pipe.wait_for_frames()
+        aligned_frames = self._StreamOld__align_to_color.process(frames)
         rs_depth = aligned_frames.get_depth_frame()
         rs_color = aligned_frames.get_color_frame()
 
-        if self._Stream__first:
+        if self._StreamOld__first:
             self.intrinsics = rs_depth.get_profile().as_video_stream_profile().intrinsics
 
         np_depth = np.float32(rs_depth.get_data()) * 1 / 65535
@@ -484,7 +671,7 @@ class Recording_old(Stream_old):
         return self.frame
 
 
-class Camera(Stream_old):
+class CameraOld(StreamOld):
     """Class to handle the interaction with the Realsense API for real-time frame capture"""
 
     def __init__(self, device):
@@ -497,9 +684,9 @@ class Camera(Stream_old):
         # for 10-15frames before any get_frames can be used.
         self.warmedup = False
 
-        Stream_old.__init__(self, device)
+        StreamOld.__init__(self, device)
 
-        depth_sensor = self._Stream_old__device.first_depth_sensor()
+        depth_sensor = self._StreamOld__device.first_depth_sensor()
 
         if depth_sensor.supports(rs2.option.emitter_enabled):
             depth_sensor.set_option(rs2.option.emitter_enabled, True)
@@ -524,7 +711,7 @@ class Camera(Stream_old):
     def warmup(self):
         """Warmup the camera before frame acquisition"""
         for i in range(30):
-            frames = self._Stream_old__pipe.wait_for_frames()
+            frames = self._StreamOld__pipe.wait_for_frames()
         self.warmedup = True
         self._Stream__first = False
         self.intrinsics = frames.get_depth_frame().get_profile().as_video_stream_profile().intrinsics
@@ -534,8 +721,8 @@ class Camera(Stream_old):
 
         if not self.warmedup:
             self.warmup()
-        frames = self._Stream_old__pipe.wait_for_frames()
-        aligned_frames = self._Stream_old__align_to_color.process(frames)
+        frames = self._StreamOld__pipe.wait_for_frames()
+        aligned_frames = self._StreamOld__align_to_color.process(frames)
         rs_depth = aligned_frames.get_depth_frame()
         rs_color = aligned_frames.get_color_frame()
 
