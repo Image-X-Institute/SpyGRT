@@ -35,6 +35,84 @@ CALIBRATION_FOLDER = '../Calibrations/'
 
 
 class Tracker:
+    """Class to handle surface tracking."""
+
+    def __init__(self, ref_surface=None, roi=None):
+        # Reference surface for the registration
+        self._ref_surface = ref_surface
+
+        # ROI boundaries for Registration
+        self._roi = roi
+
+        # Initiating source point_cloud
+        self._current_surface = None
+
+        # Initiating box filter.
+        self._box = o3d.t.geometry.AxisAlignedBoundingBox()
+
+        if roi is not None:
+            self._box.set_min_bound = o3d.core.Tensor(self._roi[0])
+            self._box.set_max_bound = o3d.core.Tensor(self.roi[1])
+
+    # Setter for ROI and Reference surface as property is not very useful right now but allows for growth later
+    # if we want to create some checks that ensure only valid values are given (i.e no empty point cloud etc.)
+    @property
+    def ref_surface(self):
+        return self._ref_surface
+
+    @ref_surface.setter
+    def ref_surface(self, ref_surface):
+        self._ref_surface = ref_surface
+
+    @property
+    def current_surface(self):
+        return self._current_surface
+
+    @current_surface.setter
+    def current_surface(self, current_surface):
+        """
+
+        Args:
+            current_surface:
+
+        Returns:
+
+        """
+        current_surface.crop(self._box)
+        return self._current_surfaceS
+
+    @property
+    def roi(self):
+        return self._roi
+
+    @roi.setter
+    def roi(self, roi):
+        self._roi = roi
+        self._box.set_min_bound = o3d.core.Tensor(self._roi[0])
+        self._box.set_max_bound = o3d.core.Tensor(self.roi[1])
+
+    def select_roi(self):
+        """
+
+        Returns:
+            roi: min and max coordinate of a box containing the ROI.
+        """
+        vis = o3d.visualization.VisualizerWithEditing
+        vis.create_window()
+        vis.add_geometry(self.ref_surface)
+        vis.run()
+        vis.destroy_window()
+        idx = vis.get_picked_points()
+
+        self._roi = [self._ref_surface.point["positions"][idx[0]].numpy(),
+                     self._ref_surface.point["positions"][idx[1]].numpy()]
+        self._box.set_min_bound = o3d.core.Tensor(self._roi[0])
+        self._box.set_max_bound = o3d.core.Tensor(self.roi[1])
+
+
+
+
+class TrackerOld:
     """Class to handle surface tracking"""
 
     def __init__(self, devices, cam_dict=None):

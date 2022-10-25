@@ -43,6 +43,10 @@ class NoMoreFrames(Exception):
     pass
 
 
+class DualStreamError(Exception):
+    pass
+
+
 class Stream(ABC):
     """Abstract Parent Class to handle the interactions with the RealSense API"""
 
@@ -66,7 +70,35 @@ class Stream(ABC):
         Args:
             new_frame: New frame to replace existing frame.
         """
-        logging.warning('Manually setting the \'frame\' attribute is not allowed.')
+        logging.warning('Manually setting the \'frame\' attribute is not allowed, use \'get_frame\' instead')
+
+    @property
+    @abstractmethod
+    def pose(self):
+        pass
+
+    @property
+    @abstractmethod
+    def pcd(self):
+        pass
+
+    @pcd.setter
+    def pcd(self, pcd):
+        """
+        Ensures that the pcd attribute is only modified by computing a Point cloud from the current frame.
+
+        Args:
+            pcd: New point cloud to replace the existing point cloud.
+        """
+        logging.warning('Manually setting the \'pcd\' attribute is not allowed, use \'compute_pcd\' instead')
+
+    @abstractmethod
+    def compute_pcd(self, new_frame=False):
+        pass
+
+    @abstractmethod
+    def load_calibration(self, filename=None):
+        pass
 
     @abstractmethod
     def end_stream(self):
@@ -80,7 +112,7 @@ class Stream(ABC):
 class Camera(Stream):
     """Class to handle the interaction with the Realsense API for real-time frame capture"""
 
-    def __init__(self, device):
+    def __init__(self, device, filename=None):
         """
         Initialise the camera settings and start the stream.
 
@@ -88,6 +120,17 @@ class Camera(Stream):
             device: Realsense device object pointing to a camera(rs2.device).
         """
         self._frame = None
+
+        if filename is not None:
+            self.load_calibration(filename)
+        else:
+            self._pose = None
+
+        # Realsense point cloud object useful for the compute_pcd method. For internal class use only.
+        self._rs_pc = rs2.pointcloud()
+
+        # A point cloud object representing the latest frame. Stored in a Open3D Tensor PointCloud format.
+        self._pcd = o3d.t.geometry.PointCloud()
 
         # Initialise serial number early as it is needed for Stream configuration
         self.serial = device.get_info(rs2.camera_info.serial_number)
@@ -157,6 +200,81 @@ class Camera(Stream):
         if self._frame is None:
             self._frame = self.get_frames()
         return self._frame
+
+    @property
+    def pose(self):
+        """
+        Access the 4x4 matrix representing the camera pose.
+
+        Returns:
+            pose (numpy ndarray): a 4x4 matrix representing the camera to world transform
+        """
+
+        if self._pose is None:
+            try:  # Try because we're calling load_calibration without a filename and using the default filename and
+                # location
+                self.load_calibration()
+            except OSError as e:
+                logging.error("Could not find the default calibration file for camera with serial number: "
+                              + self.serial)
+                raise e
+        return self._pose
+
+    @property
+    def pcd(self):
+        """
+        Access the point cloud form of the current frame.
+
+        Returns:
+            pcd: A tensor-based Open3D point cloud object.
+        """
+        if self._pcd.is_empty():
+            self.compute_pcd()
+        return self._pcd
+
+    def compute_pcd(self, new_frame=False):
+        """
+        Computes a Point Cloud from the newest acquired frame.
+
+        Args:
+            new_frame: Bool to determine whether a new frame should be acquired first.
+
+        Returns:
+            pcd: the point cloud representation of the newest acquired frame in an Open3D Tensor PointCloud format.
+        """
+
+        if new_frame:
+            self.get_frames('rs')
+
+        self._rs_pc.map_to(self.frame[1])
+        # Get the raw point cloud data
+        dat = self._rs_pc.calculate(self.frame[0])
+        # Changes how the data is "viewed" without making changes to the memory. Results in a list of 3D coordinates
+        depth_dat = np.asanyarray(dat.get_vertices()).view(np.float32).reshape([-1, 3])
+        # Reformat the colour data into a list of RGB values
+        col_dat = np.asanyarray(self.frame[1].get_data()).reshape([-1, 3])
+
+        self._pcd.point["positions"] = depth_dat
+        self._pcd.point["colors"] = col_dat
+
+        return self._pcd
+
+    def load_calibration(self, filename=None):
+        """
+        Initiates the pose attribute from a calibration file.
+
+        Args:
+            filename: String containing the filename of the calibration file.
+
+        Returns:
+            pose (numpy ndarray): a 4x4 matrix representing the camera to world transform
+
+        """
+        if filename is None:
+            filename = self.serial + "_cal.txt"
+        self._pose = np.loadtxt(filename)
+
+        return self._pose
 
     # Encoding will be deprecated later, for now used for backward compatibility
     def get_frames(self, encoding='o3d'):
@@ -242,13 +360,30 @@ class Camera(Stream):
 class Recording(Stream):
     """Class to handle the interaction with the Realsense API for realsense bag files."""
 
-    def __init__(self, device):
+    def __init__(self, device, filename=None):
         """
 
         Args:
             device: link to a bag file containing a recording.
         """
         self._frame = None
+
+        if filename is not None:
+            self.load_calibration(filename)
+        else:
+            self._pose = None
+
+        # Realsense point cloud object useful for the compute_pcd method. For internal class use only.
+        self._rs_pc = rs2.pointcloud()
+
+        # Realsense threshold filter object for processing frames.
+        self._threshold_filter = rs2.threshold_filter(0.1, 1.3)
+
+        # Realsense spatial filter that lower noise and preserve edges.
+        self._spatial_filter = rs2.spatial_filter()
+
+        # A point cloud object representing the latest frame. Stored in a Open3D Tensor PointCloud format.
+        self._pcd = o3d.t.geometry.PointCloud()
 
         # pipeline that controls the acquisition of frames.
         self._pipe = rs2.pipeline()
@@ -305,6 +440,85 @@ class Recording(Stream):
             self._frame = self.get_frames()
         return self._frame
 
+    @property
+    def pose(self):
+        """
+        Access the 4x4 matrix representing the camera pose.
+
+        Returns:
+            pose (numpy ndarray): a 4x4 matrix representing the camera to world transform
+        """
+
+        if self._pose is None:
+            try:  # Try because we're calling load_calibration without a filename and using the default filename and
+                # location
+                self.load_calibration()
+            except OSError as e:
+                logging.error("Could not find the default calibration file for camera with serial number: "
+                              + self.serial)
+                raise e
+        return self._pose
+
+    @property
+    def pcd(self):
+        """
+        Access the point cloud form of the current frame.
+
+        Returns:
+            pcd: A tensor-based Open3D point cloud object.
+        """
+        if self._pcd.is_empty():
+            self.compute_pcd()
+
+        return self._pcd
+
+    def compute_pcd(self, new_frame=False):
+        """
+        Computes a Point Cloud from the newest acquired frame.
+
+        Args:
+            new_frame: Bool to determine whether a new frame should be acquired first.
+
+        Returns:
+            pcd: the point cloud representation of the newest acquired frame in an Open3D Tensor PointCloud format.
+        """
+
+        if new_frame:
+            self.get_frames('rs')
+
+        self._rs_pc.map_to(self.frame[1])
+        # Get the raw point cloud data
+        dat = self._rs_pc.calculate(self.frame[0])
+        # Changes how the data is "viewed" without making changes to the memory. Results in a list of 3D coordinates
+        depth_dat = np.asanyarray(dat.get_vertices()).view(np.float32).reshape([-1, 3])
+        # Reformat the colour data into a list of RGB values
+        col_dat = np.asanyarray(self.frame[1].get_data()).reshape([-1, 3])
+
+        self._pcd.point["positions"] = depth_dat
+        self._pcd.point["colors"] = col_dat
+
+        if self._pose is not None:
+            self._pcd.transform(o3d.core.Tensor(self._pose))
+
+        return self._pcd
+
+    def load_calibration(self, filename=None):
+        """
+        Initiates the pose attribute from a calibration file.
+
+        Args:
+            filename: String containing the filename of the calibration file.
+
+        Returns:
+            pose (numpy ndarray): a 4x4 matrix representing the camera to world transform
+
+        """
+        if filename is None:
+            filename = self.serial + "_cal.txt"
+        self._pose = np.loadtxt(filename)
+
+        return self._pose
+
     def get_frames(self, encoding='o3d'):
         """
         Fetch a new set of depth and colour frame.
@@ -320,18 +534,21 @@ class Recording(Stream):
             if not self._playback.current_status() == rs2.playback_status.stopped and self._frame is None:
                 pass
             elif self._playback.current_status() == rs2.playback_status.stopped:
+                # Raise a specific realsense error if get_frames was called before start_stream or after end_stream
+                self._pipe.get_active_profile()
+
+                # If the above statement doesn't raise an exception, assume we reached the end of the file.
                 raise NoMoreFrames("Reached the end of the stream")
         except AttributeError:
             pass
 
         frames = self._pipe.wait_for_frames()
-        time.sleep(0.0001)
-        try:
-            aligned_frames = self._align_to_color.process(frames)
-        except RuntimeError:
-            self._align_to_color = rs2.align(rs2.stream.color)
-            aligned_frames = self._align_to_color.process(frames)
+
+        aligned_frames = self._align_to_color.process(frames)
+
         rs_depth = aligned_frames.get_depth_frame()
+        rs_depth = self._threshold_filter.process(rs_depth)
+        rs_depth = self._spatial_filter.process(rs_depth)
         rs_color = aligned_frames.get_color_frame()
 
         if encoding is 'o3d':
@@ -346,7 +563,7 @@ class Recording(Stream):
 
         return self._frame
 
-    def o3d_intrinsics(self):
+    def get_o3d_intrinsics(self):
         """
         Transform the camera intrinsics to an open_3D format.
 
@@ -367,6 +584,8 @@ class Recording(Stream):
             logging.warning('Tried to start a stream that is already started')
             return self._playback
         self._pipe.start(self._cfg)
+        # Pause to allow for the playback to update.
+        time.sleep(0.0001)
 
 
 class DualStream(Stream, ABC):
@@ -423,6 +642,15 @@ class DualStream(Stream, ABC):
         """
         logging.warning('Tried to reset \'stream2\', stream attributes can only be set during initialization.')
 
+    @property
+    @abstractmethod
+    def pose(self):
+        pass
+
+    @abstractmethod
+    def load_calibration(self, filename=None):
+        pass
+
     @abstractmethod
     def start_stream(self):
         pass
@@ -435,7 +663,7 @@ class DualStream(Stream, ABC):
 class DualRecording(DualStream):
     """Class to handle the interaction with the Realsense API when handling bag file recordings from 2 cameras."""
 
-    def __init__(self, stream1, stream2):
+    def __init__(self, stream1, stream2, filename=None):
         """
         Initializes the DualRecording object by setting setting both stream property
         Args:
@@ -444,6 +672,14 @@ class DualRecording(DualStream):
         """
         # Initialising frame attribute.
         self._frame = None
+
+        if filename is not None:
+            self.load_calibration(filename)
+        else:
+            self._pose = None
+
+        # A point cloud object representing the latest frame. Stored in a Open3D Tensor PointCloud format.
+        self._pcd = o3d.t.geometry.PointCloud()
 
         # Check if input is a recording object or a filepath to a recording
         if type(stream1) == Recording:
@@ -462,20 +698,6 @@ class DualRecording(DualStream):
             except RuntimeError:
                 logging.error('Could not resolve the input for \'stream2\'.')
                 raise ValueError('Could not resolve the input for \'stream2\'.')
-
-        # Loading the calibrations for each stream.
-        # Calibrations are currently not used. Unclear if they will be used by this object in the future. As such
-        # this section will be commented out for now.
-        # try:
-        #
-        #     cal1 = np.loadtxt(stream1.serial + "_cal.txt")
-        # except OSError:
-        #     logging.warning('Could not load the calibration for camera: ' + stream1.serial)
-        #
-        # try:
-        #     cal2 = np.loadtxt(stream2.serial + "_cal.txt")
-        # except OSError:
-        #     logging.warning('Could not load the calibration for camera: ' + stream2.serial)
 
     @property
     def stream1(self):
@@ -512,6 +734,99 @@ class DualRecording(DualStream):
             self._frame = self.get_frames()
         return self._frame
 
+    @property
+    def pose(self):
+        """
+        Access the 4x4 matrices representing the cameras' poses.
+
+        Returns:
+            pose (numpy ndarray): a tuple of 4x4 matrix representing the cameras to world transform
+        """
+
+        if self._pose is None:
+            try:#Try because we're calling load_calibration with the default filename
+                self.load_calibration()
+            except IOError:#Need to doublecheck that this is the right exception.
+                pass#Need to ensure proper error message is raised here.
+        return self._pose
+
+    @property
+    def pcd(self):
+        """
+        Access the point cloud form of the current frame.
+
+        Returns:
+            pcd: A tensor-based Open3D point cloud object.
+        """
+        if self._pcd.is_empty():
+            self.compute_pcd()
+
+        return self._pcd
+
+    def compute_pcd(self, new_frame=False):
+        """
+        Computes a Point Cloud from the newest acquired frame.
+
+        Args:
+            new_frame: Bool to determine whether a new frame should be acquired first.
+
+        Returns:
+            pcd: the point cloud representation of the newest acquired frame in an Open3D Tensor PointCloud format.
+        """
+
+        if new_frame:
+            self.get_frames()
+
+        if self._pose is None:
+            logging.warning("Tried to compute a dual point cloud of a stream that has not been calibrated.")
+            try:
+                self.load_calibration()
+            except DualStreamError:
+                raise DualStreamError("Cannot compute the point cloud of a dual stream that has not been calibrated.")
+
+        pcd1 = self.stream1.compute_pcd()
+        pcd2 = self.stream2.compute_pcd()
+
+        self._pcd = pcd1 + pcd2
+
+    def load_calibration(self, filename=None):
+        """
+        Uses each stream's load_calibration method to initiate their pose attribute.
+
+        Args:
+            filename: list of two strings containing the filename of the calibration files.
+        """
+
+        if filename is not None:
+            if len(filename) == 2:
+                pose1 = self.stream1.load_calibration(filename[0])
+                pose2 = self.stream2.load_calibration(filename[1])
+            else:
+                logging.warning("load_calibration method of a DualRecording object can only accept a list of exactly 2 "
+                                "files")
+                try:
+                    pose1 = self.stream1.load_calibration()
+                    pose2 = self.stream2.load_calibration()
+                except OSError:
+                    logging.error("Could not complete calibration with default filename for DualStream object")
+                    raise DualStreamError("Tried to complete default calibration but could not find calibration files")
+        else:
+            try:
+                if self.stream1.pose is not None:
+                    pose1 = self.stream1.pose
+                else:
+                    pose1 = self.stream1.load_calibration()
+                if self.stream2.pose is not None:
+                    pose2 = self.stream2.pose
+                else:
+                    pose2 = self.stream2.load_calibration()
+            except OSError:
+                logging.error("Could not complete calibration with default filename for DualStream object")
+                raise DualStreamError("Tried to complete default calibration but could not find calibration files")
+
+        self._pose = (pose1, pose2)
+        return self._pose
+
     def get_frames(self):
         """
             Fetch new frame and ensure temporal alignment.
@@ -520,10 +835,14 @@ class DualRecording(DualStream):
             frame:Tuple containing two sets of (depth,colour) frames, 1 for each stream.
 
         """
-
+        # Getting new frames with a call  to the cameras.
         f1 = self._stream1.get_frames(encoding='rs')
         f2 = self._stream2.get_frames(encoding='rs')
+
+        # Get the delay between the depth frames of each camera
         diff = f2[0].timestamp - f1[0].timestamp
+        # If delay is more than 30ms, figure out which camera is behind and call new frames from that camera until
+        # Both cameras are synchronised.
         while np.abs(diff) > 30:
             if diff > 30:
                 f1 = self._stream1.get_frames(encoding='rs')
@@ -588,7 +907,6 @@ class StreamOld:
 
         # Pinhole camera intrinsics for depth camera
         self.intrinsics = depth_sensor.get_stream_profiles()[0].as_video_stream_profile().intrinsics
-
 
     def get_frames(self):
         """Fetch an aligned depth and color frame."""

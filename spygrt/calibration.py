@@ -36,10 +36,12 @@ DEFAULT_COLUMN = 8
 DEFAULT_SQUARE_SIZE = 0.043
 
 class Calibrator:
-	"""Class to contain and perform the calibration of a camera to a predetermined frame of reference or to that of a different camera."""
+	"""Class to contain and perform the calibration of a camera to a predetermined frame of reference or to that of a
+	different camera."""
 
 	def __init__(self, cam):
 		self.sensor = cam
+		self.sensor.start_stream()
 		self.depth, self.color = cam.get_frames()
 		self.depth = self.depth.filter_bilateral(10,20/65535,10)
 		self.o3d_intrinsics = cam.get_o3d_intrinsics()
