@@ -472,6 +472,18 @@ class Recording(Stream):
 
         return self._pcd
 
+    def seek(self, time_delta):
+        """
+
+        Args:
+            time_delta:
+
+        Returns:
+
+        """
+        self._playback.seek(time_delta)
+
+
     def compute_pcd(self, new_frame=False):
         """
         Computes a Point Cloud from the newest acquired frame.
@@ -673,6 +685,9 @@ class DualRecording(DualStream):
         # Initialising frame attribute.
         self._frame = None
 
+        # Timestamp of the most current depth frame.
+        self._timestamp = None
+
         if filename is not None:
             self.load_calibration(filename)
         else:
@@ -763,6 +778,39 @@ class DualRecording(DualStream):
 
         return self._pcd
 
+    @pcd.setter
+    def pcd(self, pcd):
+        """
+        Ensures pcd is read-only
+
+        Args:
+            pcd: New point cloud
+        """
+        logger.warning("tried to manually set a new point cloud")
+        pass
+
+    @property
+    def timestamp(self):
+        """
+        Access the timestamp of the latest frame
+
+        Returns:
+            timestamp: Timestamp of the most recent frame (ms), averaged of the two streams' timestamp.
+        """
+
+        return self._timestamp
+
+    @timestamp.setter
+    def timestamp(self, timestamp):
+        """
+        Ensure timestamp is read-only.
+
+        Args:
+            timestamp: New timestamp
+        """
+        logger.warning("Tried to manually change the timestamp")
+        pass
+
     def compute_pcd(self, new_frame=False):
         """
         Computes a Point Cloud from the newest acquired frame.
@@ -778,16 +826,20 @@ class DualRecording(DualStream):
             self.get_frames()
 
         if self._pose is None:
-            logging.warning("Tried to compute a dual point cloud of a stream that has not been calibrated.")
-            try:
-                self.load_calibration()
-            except DualStreamError:
-                raise DualStreamError("Cannot compute the point cloud of a dual stream that has not been calibrated.")
-
+            if self._stream1.pose is None or self._stream2.pose is None:
+                logging.warning("Tried to compute a dual point cloud of a stream that has not been calibrated.")
+                try:
+                    self.load_calibration()
+                except DualStreamError:
+                    raise DualStreamError("Cannot compute the point cloud of a dual stream that has not been "
+                                          "calibrated.")
+            else:
+                self._pose = (self._stream1.pose, self._stream2.pose)
         pcd1 = self.stream1.compute_pcd()
         pcd2 = self.stream2.compute_pcd()
 
         self._pcd = pcd1 + pcd2
+        return self._pcd
 
     def load_calibration(self, filename=None):
         """
@@ -843,16 +895,21 @@ class DualRecording(DualStream):
         diff = f2[0].timestamp - f1[0].timestamp
         # If delay is more than 30ms, figure out which camera is behind and call new frames from that camera until
         # Both cameras are synchronised.
-        while np.abs(diff) > 30:
-            if diff > 30:
+        while np.abs(diff) > 100:
+            if diff > 100:
+                print("Timestamps:" + str(f1[0].timestamp) + " " + str(f1[0].frame_number) + " "
+                      + str(f2[0].timestamp) + " " + str(f2[0].frame_number))
                 f1 = self._stream1.get_frames(encoding='rs')
                 diff = f2[0].timestamp - f1[0].timestamp
                 continue
-            elif diff < -30:
+            elif diff < -100:
+                print("Timestamps:" + str(f1[0].timestamp) + " " +str(f1[0].frame_number) + " "
+                      + str(f2[0].timestamp) + " " +str(f2[0].frame_number) )
                 f2 = self._stream2.get_frames(encoding='rs')
                 diff = f2[0].timestamp - f1[0].timestamp
                 continue
 
+        self._timestamp = (f1[0].timestamp + f2[0].timestamp)/2
         self._frame = (f1, f2)
         return self._frame
 
@@ -861,12 +918,14 @@ class DualRecording(DualStream):
 
         self._stream1.start_stream()
         self._stream2.start_stream()
+        time.sleep(0.0001)
 
     def end_stream(self):
         """Ends the stream by ending both stream1 and stream2."""
 
         self._stream1.end_stream()
         self._stream2.end_stream()
+
 
 
 class StreamOld:

@@ -30,6 +30,8 @@ from spygrt.stream import NoMoreFrames
 import os
 import sys
 
+o3d_reg = o3d.t.pipelines.registration
+
 # Modify with path to calibration files
 CALIBRATION_FOLDER = '../Calibrations/'
 
@@ -39,47 +41,69 @@ class Tracker:
 
     def __init__(self, ref_surface=None, roi=None):
         # Reference surface for the registration
-        self._ref_surface = ref_surface
+        if ref_surface is None:
+            self._ref_surface = o3d.t.geometry.PointCloud()
+        else:
+            self._ref_surface = ref_surface
 
         # ROI boundaries for Registration
-        self._roi = roi
-
-        # Initiating source point_cloud
-        self._current_surface = None
+        if roi is None:
+            # If there is no ROI but a reference surface is
+            if ref_surface is not None:
+                self._box = None
+                self.select_roi()
+            else:
+                self._roi = np.asarray([[-2., -2., -2.], [2., 2., 2.]], dtype='float32')
+        else:
+            self._roi = roi
 
         # Initiating box filter.
-        self._box = o3d.t.geometry.AxisAlignedBoundingBox()
+        self._box = o3d.t.geometry.AxisAlignedBoundingBox(o3d.core.Tensor(self._roi[0]), o3d.core.Tensor(self._roi[1]))
 
-        if roi is not None:
-            self._box.set_min_bound = o3d.core.Tensor(self._roi[0])
-            self._box.set_max_bound = o3d.core.Tensor(self.roi[1])
+        if ref_surface is not None:
+            self._ref_surface = self._ref_surface.crop(self._box)
+            self._ref_surface.estimate_normals(30, 0.001)
 
-    # Setter for ROI and Reference surface as property is not very useful right now but allows for growth later
-    # if we want to create some checks that ensure only valid values are given (i.e no empty point cloud etc.)
+        # Initial transformation guess
+        self._t_guess = o3d.core.Tensor(np.identity(4))
+
+        # FOR DEBUG AND TESTING OF get_motion.
+        self._source = None
+
+    @property
+    def t_guess(self):
+        """
+
+        Returns:
+
+        """
+        return self._t_guess
+
+    @t_guess.setter
+    def t_guess(self, t_guess):
+        """
+
+        Args:
+            t_guess:
+
+        Returns:
+
+        """
+        if type(t_guess) == np.ndarray:
+            self._t_guess = o3d.core.Tensor(t_guess)
+        else:
+            self._t_guess = t_guess
+
+    # Might want to create some checks in setters that ensure only valid values are given(i.e no empty point cloud etc.)
+
     @property
     def ref_surface(self):
         return self._ref_surface
 
     @ref_surface.setter
     def ref_surface(self, ref_surface):
-        self._ref_surface = ref_surface
-
-    @property
-    def current_surface(self):
-        return self._current_surface
-
-    @current_surface.setter
-    def current_surface(self, current_surface):
-        """
-
-        Args:
-            current_surface:
-
-        Returns:
-
-        """
-        current_surface.crop(self._box)
-        return self._current_surfaceS
+        self._ref_surface = ref_surface.crop(self._box)
+        self._ref_surface.estimate_normals(30, 0.001)
 
     @property
     def roi(self):
@@ -87,29 +111,112 @@ class Tracker:
 
     @roi.setter
     def roi(self, roi):
-        self._roi = roi
+        self._roi = np.asarray(roi, dtype='float32')
         self._box.set_min_bound = o3d.core.Tensor(self._roi[0])
         self._box.set_max_bound = o3d.core.Tensor(self.roi[1])
 
     def select_roi(self):
         """
+        Allow for manual selection of a region of interest to track on the reference surface.
 
         Returns:
             roi: min and max coordinate of a box containing the ROI.
         """
-        vis = o3d.visualization.VisualizerWithEditing
+        vis = o3d.visualization.VisualizerWithEditing()
         vis.create_window()
-        vis.add_geometry(self.ref_surface)
+        vis.add_geometry(self._ref_surface.to_legacy())
         vis.run()
         vis.destroy_window()
         idx = vis.get_picked_points()
+        p1 = self._ref_surface.point["positions"][idx[0]].numpy()
+        p2 = self._ref_surface.point["positions"][idx[1]].numpy()
 
-        self._roi = [self._ref_surface.point["positions"][idx[0]].numpy(),
-                     self._ref_surface.point["positions"][idx[1]].numpy()]
-        self._box.set_min_bound = o3d.core.Tensor(self._roi[0])
-        self._box.set_max_bound = o3d.core.Tensor(self.roi[1])
+        mid_z = np.mean([p1[2], p2[2]])
+        lower = [np.min([p1[0], p2[0]])-0.02, np.min([p1[1], p2[1]])-0.02, mid_z - 0.02]
+        upper = [np.max([p1[0], p2[0]])+0.02, np.max([p1[1], p2[1]])+0.02, mid_z + 0.1]
 
+        self._roi = np.asarray([lower, upper], dtype='float32')
+        self._box = o3d.t.geometry.AxisAlignedBoundingBox(o3d.core.Tensor(self._roi[0]), o3d.core.Tensor(self._roi[1]))
 
+    def get_motion(self, source):
+        """
+        Uses ICP to calculate the motion between the input point cloud and the reference point cloud.
+
+        Args:
+            source: Point cloud to be registered.
+
+        Returns:
+            motion: 4x4 transformation matrix representing the change in 6DoF motion
+        """
+        # Initializing Multiscale parameters
+
+        # For down sampling of the point-cloud
+        voxel_radius = o3d.utility.DoubleVector([0.05, 0.01, 0.005, 0.003, 0.001])
+        # Maximum distance between correspondences
+        dist = o3d.utility.DoubleVector([0.1, 0.05, 0.01, 0.008, 0.005])
+        # Number of iteration for the RMSE optimization
+        max_iter = o3d.utility.IntVector([50, 30, 14, 7, 3])
+
+        # List of convergence criterion for multiscale ICP
+        criteria = []
+        for it in max_iter:
+            criteria.append(o3d_reg.ICPConvergenceCriteria(relative_fitness=1e-9,
+                                                           relative_rmse=1e-9,
+                                                           max_iteration=it))
+
+        # Cropping the input point cloud to obtain only the ROI
+        box = o3d.geometry.OrientedBoundingBox.create_from_axis_aligned_bounding_box(self._box.to_legacy())
+        # Commented out as transform is not yet implemented.
+        # box.transform(self._t_guess.numpy())
+        box.rotate(self._t_guess.numpy()[0:3].T[0:3].T)
+        box.translate(self._t_guess.numpy().T[-1][0:3])
+        source = o3d.t.geometry.PointCloud.from_legacy(source.to_legacy().crop(box))
+        self._source = source
+
+        # Point further than 1cm apart are considered non-corresponding.
+        loss_function = o3d_reg.robust_kernel.RobustKernel(o3d_reg.robust_kernel.RobustKernelMethod.TukeyLoss, 0.01)
+        # ICP specific method (Point to plane + loss function)
+        method = o3d_reg.TransformationEstimationPointToPlane(loss_function)
+
+        result_icp = o3d_reg.multi_scale_icp(source, self._ref_surface, voxel_radius, criteria, dist, self._t_guess,
+                                             method)
+
+        self._t_guess = result_icp.transformation
+
+        return self._t_guess
+
+    @staticmethod
+    def isR_matrix(R):
+        """determine whether a 3x3 matrix is a rotation matrix."""
+        return (np.linalg.norm(np.identity(3, dtype=R.dtype) - np.dot(R.T, R)) < 1e-6)
+
+    @staticmethod
+    def compute_translation(T):
+        """Extract translations from affine tranformation matrix."""
+        return T.numpy().T[-1][0:3]
+
+    @staticmethod
+    def compute_rotation(T):
+        """Extract rotations from an affine transformation matrix."""
+        R = T.numpy()[0:3].T[0:3].T.copy()
+        if not Tracker.isR_matrix(R):
+            print("Matrix is not a rotation matrix", sys.stderr)
+            sys.exit()
+
+        sy = np.sqrt(R[0, 0] * R[0, 0] + R[1, 0] * R[1, 0])
+        singular = sy < 1e-6
+
+        if not singular:
+            roll = np.arctan2(R[2, 1], R[2, 2]) * 180 / np.pi
+            pitch = np.arctan2(-R[2, 0], sy) * 180 / np.pi
+            yaw = np.arctan2(R[1, 0], R[0, 0]) * 180 / np.pi
+
+        else:
+            roll = np.arctan2(-R[1, 2], R[1, 1])
+            pitch = np.arctan2(-R[2, 0], sy)
+            yaw = 0
+
+        return [yaw, pitch, roll]
 
 
 class TrackerOld:
@@ -369,7 +476,6 @@ class TrackerOld:
             roll = np.arctan2(R[2, 1], R[2, 2]) * 180 / np.pi
             pitch = np.arctan2(-R[2, 0], sy) * 180 / np.pi
             yaw = np.arctan2(R[1, 0], R[0, 0]) * 180 / np.pi
-
 
         else:
             roll = np.arctan2(-R[1, 2], R[1, 1])
