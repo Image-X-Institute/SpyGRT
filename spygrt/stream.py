@@ -297,7 +297,7 @@ class Camera(Stream):
         rs_depth = aligned_frames.get_depth_frame()
         rs_color = aligned_frames.get_color_frame()
 
-        if encoding is 'o3d':
+        if encoding == 'o3d':
             np_depth = np.float32(rs_depth.get_data()) * 1 / 65535
             np_color = np.asanyarray(rs_color.get_data())
 
@@ -563,7 +563,7 @@ class Recording(Stream):
         rs_depth = self._spatial_filter.process(rs_depth)
         rs_color = aligned_frames.get_color_frame()
 
-        if encoding is 'o3d':
+        if encoding == 'o3d':
             np_depth = np.float32(rs_depth.get_data()) * 1 / 65535
             np_color = np.asanyarray(rs_color.get_data())
 

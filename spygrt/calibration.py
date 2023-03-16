@@ -59,7 +59,7 @@ class Calibrator:
 		if filename is None:
 			filename = self.sensor.serial +"_cal.txt"
 
-		np.savetxt(filename,self.T.numpy())
+		np.savetxt(filename, self.T.numpy())
 
 	def get_corners(self):
 		"""Get the 3D coordinate of cordinate in the frame of reference of the 
