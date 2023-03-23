@@ -31,6 +31,7 @@ import os
 import sys
 
 o3d_reg = o3d.t.pipelines.registration
+o3d_geo = o3d.t.geometry
 
 # Modify with path to calibration files
 CALIBRATION_FOLDER = '../Calibrations/'
@@ -58,7 +59,7 @@ class Tracker:
             self._roi = roi
 
         # Initiating box filter.
-        self._box = o3d.t.geometry.AxisAlignedBoundingBox(o3d.core.Tensor(self._roi[0]), o3d.core.Tensor(self._roi[1]))
+        self._box = o3d_geo.AxisAlignedBoundingBox(o3d.core.Tensor(self._roi[0]), o3d.core.Tensor(self._roi[1]))
 
         if ref_surface is not None:
             self._ref_surface = self._ref_surface.crop(self._box)
@@ -136,7 +137,7 @@ class Tracker:
         upper = [np.max([p1[0], p2[0]])+0.02, np.max([p1[1], p2[1]])+0.02, mid_z + 0.1]
 
         self._roi = np.asarray([lower, upper], dtype='float32')
-        self._box = o3d.t.geometry.AxisAlignedBoundingBox(o3d.core.Tensor(self._roi[0]), o3d.core.Tensor(self._roi[1]))
+        self._box = o3d_geo.AxisAlignedBoundingBox(o3d.core.Tensor(self._roi[0]), o3d.core.Tensor(self._roi[1]))
 
     def get_motion(self, source):
         """
@@ -165,12 +166,10 @@ class Tracker:
                                                            max_iteration=it))
 
         # Cropping the input point cloud to obtain only the ROI
-        box = o3d.geometry.OrientedBoundingBox.create_from_axis_aligned_bounding_box(self._box.to_legacy())
+        box = o3d_geo.OrientedBoundingBox.create_from_axis_aligned_bounding_box(self._box)
         # Commented out as transform is not yet implemented.
-        # box.transform(self._t_guess.numpy())
-        box.rotate(self._t_guess.numpy()[0:3].T[0:3].T)
-        box.translate(self._t_guess.numpy().T[-1][0:3])
-        source = o3d.t.geometry.PointCloud.from_legacy(source.to_legacy().crop(box))
+        box.transform(self._t_guess.numpy())
+        source = source.crop(box)
         self._source = source
 
         # Point further than 1cm apart are considered non-corresponding.
