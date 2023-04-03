@@ -468,7 +468,7 @@ class Recording(Stream):
             pcd: A tensor-based Open3D point cloud object.
         """
         if self._pcd.is_empty():
-            self.compute_pcd()
+            self.compute_pcd(False)
 
         return self._pcd
 
@@ -677,7 +677,7 @@ class DualRecording(DualStream):
 
     def __init__(self, stream1, stream2, filename=None):
         """
-        Initializes the DualRecording object by setting setting both stream property
+        Initializes the DualRecording object by setting both stream property
         Args:
             stream1: First stream of the dual stream.
             stream2: Second stream of the dual stream.
@@ -811,6 +811,18 @@ class DualRecording(DualStream):
         logger.warning("Tried to manually change the timestamp")
         pass
 
+    def seek(self, time_delta):
+        """
+
+        Args:
+            time_delta:
+
+        Returns:
+
+        """
+        self.stream1.seek(time_delta)
+        self.stream2.seek(time_delta)
+
     def compute_pcd(self, new_frame=False):
         """
         Computes a Point Cloud from the newest acquired frame.
@@ -835,8 +847,8 @@ class DualRecording(DualStream):
                                           "calibrated.")
             else:
                 self._pose = (self._stream1.pose, self._stream2.pose)
-        pcd1 = self.stream1.compute_pcd()
-        pcd2 = self.stream2.compute_pcd()
+        pcd1 = self.stream1.compute_pcd(new_frame)
+        pcd2 = self.stream2.compute_pcd(new_frame)
 
         self._pcd = pcd1 + pcd2
         return self._pcd
