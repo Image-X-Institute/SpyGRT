@@ -7,7 +7,7 @@ __version__ = re.search(
     ).group(1)
 setup(
     name ='SpyGRT',
-    python_requires = '>=3.7, <3.10',
+    python_requires = '>=3.7, <3.11',
     packages = ['spygrt'],
     version = __version__,
     license = 'MIT',
