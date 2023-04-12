@@ -38,6 +38,12 @@ formatter = logging.Formatter('- %(module)s - %(levelname)-8s: %(message)s')
 fh.setFormatter(formatter)
 logger.addHandler(fh)
 
+DEVICE = None
+if hasattr(o3d, 'cuda'):
+    DEVICE = o3d.core.Device('cuda:0')
+else:
+    DEVICE = o3d.core.Device('cpu:0')
+
 
 class NoMoreFrames(Exception):
     pass
@@ -130,7 +136,7 @@ class Camera(Stream):
         self._rs_pc = rs2.pointcloud()
 
         # A point cloud object representing the latest frame. Stored in a Open3D Tensor PointCloud format.
-        self._pcd = o3d.t.geometry.PointCloud()
+        self._pcd = o3d.t.geometry.PointCloud(device=DEVICE)
 
         # Initialise serial number early as it is needed for Stream configuration
         self.serial = device.get_info(rs2.camera_info.serial_number)
@@ -256,6 +262,9 @@ class Camera(Stream):
 
         self._pcd.point["positions"] = depth_dat
         self._pcd.point["colors"] = col_dat
+
+        if self._pose is not None:
+            self._pcd.transform(o3d.core.Tensor(self._pose, device=DEVICE))
 
         return self._pcd
 
@@ -383,7 +392,7 @@ class Recording(Stream):
         self._spatial_filter = rs2.spatial_filter()
 
         # A point cloud object representing the latest frame. Stored in a Open3D Tensor PointCloud format.
-        self._pcd = o3d.t.geometry.PointCloud()
+        self._pcd = o3d.t.geometry.PointCloud(device=DEVICE)
 
         # pipeline that controls the acquisition of frames.
         self._pipe = rs2.pipeline()
@@ -483,7 +492,6 @@ class Recording(Stream):
         """
         self._playback.seek(time_delta)
 
-
     def compute_pcd(self, new_frame=False):
         """
         Computes a Point Cloud from the newest acquired frame.
@@ -505,12 +513,13 @@ class Recording(Stream):
         depth_dat = np.asanyarray(dat.get_vertices()).view(np.float32).reshape([-1, 3])
         # Reformat the colour data into a list of RGB values
         col_dat = np.asanyarray(self.frame[1].get_data()).reshape([-1, 3])
-
-        self._pcd.point["positions"] = depth_dat
-        self._pcd.point["colors"] = col_dat
+        col_t= o3d.core.Tensor(col_dat, device=DEVICE)
+        depth_t = o3d.core.Tensor(depth_dat, device=DEVICE)
+        self._pcd.point["positions"] = depth_t
+        self._pcd.point["colors"] = col_t
 
         if self._pose is not None:
-            self._pcd.transform(o3d.core.Tensor(self._pose))
+            self._pcd.transform(o3d.core.Tensor(self._pose, device=DEVICE))
 
         return self._pcd
 
@@ -567,8 +576,8 @@ class Recording(Stream):
             np_depth = np.float32(rs_depth.get_data()) * 1 / 65535
             np_color = np.asanyarray(rs_color.get_data())
 
-            depth = o3d.t.geometry.Image(o3d.core.Tensor(np_depth))
-            color = o3d.t.geometry.Image(o3d.core.Tensor(np_color))
+            depth = o3d.t.geometry.Image(o3d.core.Tensor(np_depth), device=DEVICE)
+            color = o3d.t.geometry.Image(o3d.core.Tensor(np_color), device=DEVICE)
             self._frame = (depth, color)
         else:
             self._frame = (rs_depth, rs_color)
@@ -694,7 +703,7 @@ class DualRecording(DualStream):
             self._pose = None
 
         # A point cloud object representing the latest frame. Stored in a Open3D Tensor PointCloud format.
-        self._pcd = o3d.t.geometry.PointCloud()
+        self._pcd = o3d.t.geometry.PointCloud(device=DEVICE)
 
         # Check if input is a recording object or a filepath to a recording
         if type(stream1) == Recording:
@@ -759,10 +768,10 @@ class DualRecording(DualStream):
         """
 
         if self._pose is None:
-            try:#Try because we're calling load_calibration with the default filename
+            try:  # Try because we're calling load_calibration with the default filename
                 self.load_calibration()
-            except IOError:#Need to doublecheck that this is the right exception.
-                pass#Need to ensure proper error message is raised here.
+            except IOError:  # Need to doublecheck that this is the right exception.
+                pass  # Need to ensure proper error message is raised here.
         return self._pose
 
     @property
@@ -915,8 +924,8 @@ class DualRecording(DualStream):
                 diff = f2[0].timestamp - f1[0].timestamp
                 continue
             elif diff < -100:
-                print("Timestamps:" + str(f1[0].timestamp) + " " +str(f1[0].frame_number) + " "
-                      + str(f2[0].timestamp) + " " +str(f2[0].frame_number) )
+                print("Timestamps:" + str(f1[0].timestamp) + " " + str(f1[0].frame_number) + " "
+                      + str(f2[0].timestamp) + " " + str(f2[0].frame_number))
                 f2 = self._stream2.get_frames(encoding='rs')
                 diff = f2[0].timestamp - f1[0].timestamp
                 continue
@@ -937,7 +946,6 @@ class DualRecording(DualStream):
 
         self._stream1.end_stream()
         self._stream2.end_stream()
-
 
 
 class StreamOld:

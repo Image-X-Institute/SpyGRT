@@ -36,6 +36,12 @@ o3d_geo = o3d.t.geometry
 # Modify with path to calibration files
 CALIBRATION_FOLDER = '../Calibrations/'
 
+DEVICE = None
+if hasattr(o3d, 'cuda'):
+    DEVICE = o3d.core.Device('cuda:0')
+else:
+    DEVICE = o3d.core.Device('cpu:0')
+
 
 class Tracker:
     """Class to handle surface tracking."""
@@ -43,7 +49,7 @@ class Tracker:
     def __init__(self, ref_surface=None, roi=None):
         # Reference surface for the registration
         if ref_surface is None:
-            self._ref_surface = o3d.t.geometry.PointCloud()
+            self._ref_surface = o3d_geo.PointCloud(DEVICE)
         else:
             self._ref_surface = ref_surface
 
@@ -59,17 +65,20 @@ class Tracker:
             self._roi = roi
 
         # Initiating box filter.
-        self._box = o3d_geo.AxisAlignedBoundingBox(o3d.core.Tensor(self._roi[0]), o3d.core.Tensor(self._roi[1]))
+        self._box = o3d_geo.AxisAlignedBoundingBox(o3d.core.Tensor(self._roi[0], device=DEVICE),
+                                                   o3d.core.Tensor(self._roi[1], device=DEVICE))
 
         if ref_surface is not None:
             self._ref_surface = self._ref_surface.crop(self._box)
             self._ref_surface.estimate_normals(30, 0.001)
 
         # Initial transformation guess
-        self._t_guess = o3d.core.Tensor(np.identity(4))
+        self._t_guess = o3d.core.Tensor(np.identity(4), device=DEVICE)
 
         # FOR DEBUG AND TESTING OF get_motion.
         self._source = None
+
+        self._icp_config = None
 
     @property
     def t_guess(self):
@@ -91,7 +100,7 @@ class Tracker:
 
         """
         if type(t_guess) == np.ndarray:
-            self._t_guess = o3d.core.Tensor(t_guess)
+            self._t_guess = o3d.core.Tensor(t_guess, device=DEVICE)
         else:
             self._t_guess = t_guess
 
@@ -113,8 +122,8 @@ class Tracker:
     @roi.setter
     def roi(self, roi):
         self._roi = np.asarray(roi, dtype='float32')
-        self._box.set_min_bound = o3d.core.Tensor(self._roi[0])
-        self._box.set_max_bound = o3d.core.Tensor(self.roi[1])
+        self._box.set_min_bound = o3d.core.Tensor(self._roi[0], device=DEVICE)
+        self._box.set_max_bound = o3d.core.Tensor(self.roi[1], device=DEVICE)
 
     def select_roi(self):
         """
@@ -129,15 +138,14 @@ class Tracker:
         vis.run()
         vis.destroy_window()
         idx = vis.get_picked_points()
-        p1 = self._ref_surface.point["positions"][idx[0]].numpy()
-        p2 = self._ref_surface.point["positions"][idx[1]].numpy()
+        p1 = self._ref_surface.point["positions"][idx[0]].cpu().numpy()
+        p2 = self._ref_surface.point["positions"][idx[1]].cpu().numpy()
 
         mid_z = np.mean([p1[2], p2[2]])
         lower = [np.min([p1[0], p2[0]])-0.02, np.min([p1[1], p2[1]])-0.02, mid_z - 0.02]
         upper = [np.max([p1[0], p2[0]])+0.02, np.max([p1[1], p2[1]])+0.02, mid_z + 0.1]
 
         self._roi = np.asarray([lower, upper], dtype='float32')
-        self._box = o3d_geo.AxisAlignedBoundingBox(o3d.core.Tensor(self._roi[0]), o3d.core.Tensor(self._roi[1]))
 
     def get_motion(self, source):
         """
@@ -149,54 +157,71 @@ class Tracker:
         Returns:
             motion: 4x4 transformation matrix representing the change in 6DoF motion
         """
-        # Initializing Multiscale parameters
+        if self._icp_config is None:
 
-        # For down sampling of the point-cloud
-        voxel_radius = o3d.utility.DoubleVector([0.05, 0.01, 0.005, 0.003, 0.001])
-        # Maximum distance between correspondences
-        dist = o3d.utility.DoubleVector([0.1, 0.05, 0.01, 0.008, 0.005])
-        # Number of iteration for the RMSE optimization
-        max_iter = o3d.utility.IntVector([50, 30, 14, 7, 3])
+            # Initializing Multiscale parameters
 
-        # List of convergence criterion for multiscale ICP
-        criteria = []
-        for it in max_iter:
-            criteria.append(o3d_reg.ICPConvergenceCriteria(relative_fitness=1e-9,
-                                                           relative_rmse=1e-9,
-                                                           max_iteration=it))
+            # For down sampling of the point-cloud
+            voxel_radius = o3d.utility.DoubleVector([0.05, 0.01, 0.005, 0.003, 0.001])
+            # Maximum distance between correspondences
+            dist = o3d.utility.DoubleVector([0.1, 0.05, 0.01, 0.008, 0.005])
+            # Number of iteration for the RMSE optimization
+            max_iter = o3d.utility.IntVector([50, 30, 14, 7, 3])
+
+            # List of convergence criterion for multiscale ICP
+            criteria = []
+            for it in max_iter:
+                criteria.append(o3d_reg.ICPConvergenceCriteria(relative_fitness=1e-9,
+                                                               relative_rmse=1e-9,
+                                                               max_iteration=it))
+
+            # Point further than 1cm apart are considered non-corresponding.
+            loss_function = o3d_reg.robust_kernel.RobustKernel(o3d_reg.robust_kernel.RobustKernelMethod.TukeyLoss, 0.01)
+            # ICP specific method (Point to plane + loss function)
+            method = o3d_reg.TransformationEstimationPointToPlane(loss_function)
+
+            self._icp_config = [voxel_radius, criteria, dist, method]
+
+
 
         # Cropping the input point cloud to obtain only the ROI
         box = o3d_geo.OrientedBoundingBox.create_from_axis_aligned_bounding_box(self._box)
         # Commented out as transform is not yet implemented.
-        box.transform(self._t_guess.numpy())
+        box.transform(self._t_guess)
         source = source.crop(box)
         self._source = source
 
-        # Point further than 1cm apart are considered non-corresponding.
-        loss_function = o3d_reg.robust_kernel.RobustKernel(o3d_reg.robust_kernel.RobustKernelMethod.TukeyLoss, 0.01)
-        # ICP specific method (Point to plane + loss function)
-        method = o3d_reg.TransformationEstimationPointToPlane(loss_function)
+        result_icp = o3d_reg.multi_scale_icp(source, self._ref_surface, self._icp_config[0], self._icp_config[1],
+                                             self._icp_config[2], self._t_guess, self._icp_config[3])
 
-        result_icp = o3d_reg.multi_scale_icp(source, self._ref_surface, voxel_radius, criteria, dist, self._t_guess,
-                                             method)
 
-        self._t_guess = result_icp.transformation
-
+        if hasattr(o3d, 'cuda'):
+            self._t_guess = result_icp.transformation.cuda()
+        else:
+            self._t_guess = result_icp.transformation
         return self._t_guess
+
 
     @staticmethod
     def isR_matrix(R):
         """determine whether a 3x3 matrix is a rotation matrix."""
-        return (np.linalg.norm(np.identity(3, dtype=R.dtype) - np.dot(R.T, R)) < 1e-6)
+        return np.linalg.norm(np.identity(3, dtype=R.dtype) - np.dot(R.T, R)) < 1e-6
 
     @staticmethod
     def compute_translation(T):
         """Extract translations from affine tranformation matrix."""
-        return T.numpy().T[-1][0:3]
+        if T.is_cuda:
+            return T.cpu().numpy().T[-1][0:3]
+        else:
+            return T.numpy().T[-1][0:3]
 
     @staticmethod
     def compute_rotation(T):
         """Extract rotations from an affine transformation matrix."""
+
+        if T.is_cuda:
+            T = T.cpu()
+
         R = T.numpy()[0:3].T[0:3].T.copy()
         if not Tracker.isR_matrix(R):
             print("Matrix is not a rotation matrix", sys.stderr)
@@ -453,16 +478,23 @@ class TrackerOld:
     @staticmethod
     def isR_matrix(R):
         """determine whether a 3x3 matrix is a rotation matrix."""
+        if R.is_cuda:
+            R = R.cpu()
         return (np.linalg.norm(np.identity(3, dtype=R.dtype) - np.dot(R.T, R)) < 1e-6)
 
     @staticmethod
     def compute_translation(T):
         """Extract translations from affine tranformation matrix."""
-        return T.numpy().T[-1][0:3]
+        if T.is_cuda:
+            return T.cpu().numpy().T[-1][0:3]
+        else:
+            return T.numpy().T[-1][0:3]
 
     @staticmethod
     def compute_rotation(T):
         """Extract rotations from an affine transformation matrix."""
+        if T.is_cuda:
+            T = T.cpu()
         R = T.numpy()[0:3].T[0:3].T.copy()
         if not Tracker.isR_matrix(R):
             print("Matrix is not a rotation matrix", sys.stderr)
