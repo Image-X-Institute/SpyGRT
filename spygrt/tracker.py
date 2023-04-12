@@ -206,16 +206,16 @@ class Tracker:
         singular = sy < 1e-6
 
         if not singular:
-            roll = np.arctan2(R[2, 1], R[2, 2]) * 180 / np.pi
-            pitch = np.arctan2(-R[2, 0], sy) * 180 / np.pi
-            yaw = np.arctan2(R[1, 0], R[0, 0]) * 180 / np.pi
+            rx = np.arctan2(-R[2, 1], R[2, 2]) * 180 / np.pi
+            ry = np.arctan2(R[2, 0], sy) * 180 / np.pi
+            rz = np.arctan2(-R[1, 0], R[0, 0]) * 180 / np.pi
 
         else:
             roll = np.arctan2(-R[1, 2], R[1, 1])
             pitch = np.arctan2(-R[2, 0], sy)
             yaw = 0
 
-        return [yaw, pitch, roll]
+        return [rx, ry, rz]
 
 
 class TrackerOld:
