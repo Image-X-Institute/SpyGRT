@@ -576,8 +576,8 @@ class Recording(Stream):
             np_depth = np.float32(rs_depth.get_data()) * 1 / 65535
             np_color = np.asanyarray(rs_color.get_data())
 
-            depth = o3d.t.geometry.Image(o3d.core.Tensor(np_depth), device=DEVICE)
-            color = o3d.t.geometry.Image(o3d.core.Tensor(np_color), device=DEVICE)
+            depth = o3d.t.geometry.Image(o3d.core.Tensor(np_depth, device=DEVICE))
+            color = o3d.t.geometry.Image(o3d.core.Tensor(np_color, device=DEVICE))
             self._frame = (depth, color)
         else:
             self._frame = (rs_depth, rs_color)

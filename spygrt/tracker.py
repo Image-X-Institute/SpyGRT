@@ -236,8 +236,8 @@ class Tracker:
             rz = np.arctan2(R[1, 0], R[0, 0]) * 180 / np.pi
 
         else: # May need to double-check axes here
-            rx = np.arctan2(-R[1, 2], R[1, 1])
-            ry = np.arctan2(-R[2, 0], sy)
+            rx = np.arctan2(-R[1, 2], R[1, 1]) * 180 / np.pi
+            ry = np.arctan2(-R[2, 0], sy) * 180 / np.pi
             rz = 0
 
         return [rx, ry, rz]

@@ -35,6 +35,13 @@ DEFAULT_ROW = 5
 DEFAULT_COLUMN = 8
 DEFAULT_SQUARE_SIZE = 0.043
 
+DEVICE = None
+if hasattr(o3d, 'cuda'):
+    DEVICE = o3d.core.Device('cuda:0')
+else:
+    DEVICE = o3d.core.Device('cpu:0')
+
+
 class Calibrator:
 	"""Class to contain and perform the calibration of a camera to a predetermined frame of reference or to that of a
 	different camera."""
@@ -45,13 +52,13 @@ class Calibrator:
 		self.depth, self.color = cam.get_frames()
 		self.depth = self.depth.filter_bilateral(10,20/65535,10)
 		self.o3d_intrinsics = cam.get_o3d_intrinsics()
-		self.T = o3d.core.Tensor(np.identity(4),dtype = o3d.core.Dtype.Float32)
+		self.T = o3d.core.Tensor(np.identity(4), dtype=o3d.core.Dtype.Float32)
 		self.pcd = None
 		self.update_pcd()
 		try:
 			self.corners = self.find_corners3D()
 		except TypeError:
-			"Couldn't find corners with default values, please try again with different values"
+			print("Couldn't find corners with default values, please try again with different values")
 		self.corners_scale()
 
 	def write_cal(self, filename = None):
@@ -62,10 +69,9 @@ class Calibrator:
 		np.savetxt(filename, self.T.numpy())
 
 	def get_corners(self):
-		"""Get the 3D coordinate of cordinate in the frame of reference of the 
-        current Calibrator object.
+		"""Get the 3D coordinate of cordinate in the frame of reference of the current Calibrator object.
         """
-		corners = np.vstack((self.corners.T,np.ones(len(self.corners)))).T
+		corners = np.vstack((self.corners.T, np.ones(len(self.corners)))).T
 		corners = self.T.numpy()@corners.T
 		return corners[0:3].T
 
@@ -84,7 +90,7 @@ class Calibrator:
 		self.depth, self.color = self.sensor.get_frames()
 		self.depth = self.depth.filter_bilateral(10,20/65535,10)
 
-	def update_pcd(self, limit = np.asarray([1,1,1]) ):
+	def update_pcd(self, limit=np.asarray([1,1,1]) ):
 		"""Update the Calibrator's pointcloud object to a pointcloud of the current view.
 		
 		If the stream has ended, update the pointcloud with the last frame.
@@ -94,46 +100,55 @@ class Calibrator:
 		except NoMoreFrames:
 			print("Stream has ended, updating pointcloud with the stream's last frame.")
 		I = o3d.core.Tensor(np.identity(4),o3d.core.Dtype.Float32)
-		rgbd = o3d.t.geometry.RGBDImage(self.color, self.depth, aligned = True)
-		pcd = o3d.t.geometry.PointCloud.create_from_rgbd_image(rgbd, o3d.core.Tensor(self.o3d_intrinsics.intrinsic_matrix,dtype = o3d.core.Dtype.Float32),
-														 I,1000/65535, depth_max = 1.2).transform(self.T).to_legacy()
+		rgbd = o3d.t.geometry.RGBDImage(self.color, self.depth, aligned=True)
+		pcd = o3d.t.geometry.PointCloud.create_from_rgbd_image(rgbd, o3d.core.Tensor(self.o3d_intrinsics.intrinsic_matrix, dtype=o3d.core.Dtype.Float32),
+															   I,1000/65535, depth_max = 1.2).transform(self.T).to_legacy()
 		box = o3d.geometry.AxisAlignedBoundingBox(-1*limit, limit)
 		pcd = pcd.crop(box)
 		self.pcd = o3d.t.geometry.PointCloud.from_legacy(pcd)
 
-	def find_corners3D(self,col=DEFAULT_COLUMN, rows=DEFAULT_ROW, draw = True):
+	def find_corners3D(self, col=DEFAULT_COLUMN, rows=DEFAULT_ROW, draw=True):
 		"""Identify the 3D coordinates of the corners of a chessboard in the current frame"""
 		corners = np.asarray([])
-		ret, corners = cv.findChessboardCorners(self.color.as_tensor().numpy(),[col,rows],corners,cv.CALIB_CB_FAST_CHECK)
+		if DEVICE == o3d.core.Device.CUDA:
+			color = self.color.as_tensor().cpu().numpy()
+			depth = self.depth.as_tensor().cpu().numpy()
+		else:
+			color = self.color.as_tensor().numpy()
+			depth = self.depth.as_tensor().numpy()
+		ret, corners = cv.findChessboardCorners(color, [col, rows], corners,
+												cv.CALIB_CB_FAST_CHECK)
 		corners3d = []
 		for corner in corners:
 			pixel = [int(np.rint(corner[0][1])),int(np.rint(corner[0][0]))]
-			corners3d.append(rs2.rs2_deproject_pixel_to_point(self.sensor.intrinsics,corner[0],float(self.depth.as_tensor().numpy()[pixel[0],pixel[1]])))
+			corners3d.append(rs2.rs2_deproject_pixel_to_point(self.sensor.intrinsics, corner[0],
+															  float(depth[pixel[0],pixel[1]])))
 
-		#Rescaling the corners to have coordinate in meters
+		# Rescaling the corners to have coordinate in meters
 		corners3d = np.asarray(corners3d) * 65535/1000
 
 		if draw:
-			self.color = o3d.t.geometry.Image(o3d.core.Tensor(cv.drawChessboardCorners(self.color.as_tensor().numpy(), [col,rows], corners, ret)))
+			self.color = o3d.t.geometry.Image(o3d.core.Tensor(cv.drawChessboardCorners(color,
+																					   [col, rows], corners, ret)))
 
 		return corners3d
 
-	def corners_scale(self, size = DEFAULT_SQUARE_SIZE):
+	def corners_scale(self, size=DEFAULT_SQUARE_SIZE):
 		"""Class to scale the corners to the real corner size - used to refine calibration."""
 		dist = []
 		corners = self.get_corners()
-		board = np.reshape(corners,[DEFAULT_ROW,DEFAULT_COLUMN,3])
+		board = np.reshape(corners, [DEFAULT_ROW, DEFAULT_COLUMN, 3])
 		for x in board:
 			for i in range(len(x)-1):
 				dist.append(np.linalg.norm(x[i]-x[i+1]))
 
-		for x in board.transpose(1,0,2):
+		for x in board.transpose(1, 0, 2):
 			for i in range(len(x)-1):
 				dist.append(np.linalg.norm(x[i]-x[i+1]))
 		scale = size*1/np.mean(dist)
 		T = np.identity(4)*scale
-		T[3,3]=1
-		self.T = o3d.core.Tensor(T,dtype = o3d.core.Dtype.Float32)@self.T
+		T[3, 3] = 1
+		self.T = o3d.core.Tensor(T, dtype=o3d.core.Dtype.Float32)@self.T
 
 	def align_cameras(self, target):
 		""" Find the transform between the two cameras based on the corners of the chessboard.
@@ -150,15 +165,16 @@ class Calibrator:
 			print("Target stream has ended, aligning cameras with the target stream's last frame.")
 		s_corners = self.get_corners()
 		t_corners = target.get_corners()
-		s_corners = o3d.core.Tensor(s_corners, dtype = o3d.core.Dtype.Float32)
-		t_corners = o3d.core.Tensor(t_corners, dtype = o3d.core.Dtype.Float32)
+		s_corners = o3d.core.Tensor(s_corners, dtype=o3d.core.Dtype.Float32)
+		t_corners = o3d.core.Tensor(t_corners, dtype=o3d.core.Dtype.Float32)
 		s_pcd = o3d.t.geometry.PointCloud(s_corners).to_legacy()
 		t_pcd = o3d.t.geometry.PointCloud(t_corners).to_legacy()
-		corr = np.zeros((len(s_corners),2))
-		corr[:, 0] = np.arange(0,len(s_corners))
-		corr[:, 1] = np.arange(0,len(t_corners))
+		corr = np.zeros((len(s_corners), 2))
+		corr[:, 0] = np.arange(0, len(s_corners))
+		corr[:, 1] = np.arange(0, len(t_corners))
 		icp = o3d.pipelines.registration.TransformationEstimationPointToPoint()
-		T = o3d.core.Tensor(icp.compute_transformation(s_pcd,t_pcd,o3d.utility.Vector2iVector(corr)), dtype = o3d.core.Dtype.Float32)
+		T = o3d.core.Tensor(icp.compute_transformation(s_pcd, t_pcd, o3d.utility.Vector2iVector(corr)),
+							dtype=o3d.core.Dtype.Float32)
 		self.T = T@self.T
 	
 	def align_to_board(self, cal2 = None, col = DEFAULT_COLUMN, rows = DEFAULT_ROW ):
@@ -178,13 +194,13 @@ class Calibrator:
 		#o3d.t.io.write_point_cloud(str(pixel[0]) + '.ply', pcd2)
 		#o3d.io.write_point_cloud(str(pixel[1]) + '.ply', pcd1.to_legacy())
 
-		board = np.reshape(corners3d,[rows,col,3])
+		board = np.reshape(corners3d, [rows, col, 3])
 		x_axes = [ms3Dline(line) for line in board]
 
 		#Taking the mean of axis vector of all rows
 		x_axis = np.mean(x_axes, axis=0)
 
-		y_axes = [ms3Dline(line) for line in board.transpose(1,0,2)]
+		y_axes = [ms3Dline(line) for line in board.transpose(1, 0, 2)]
 
 		#Taking the mean of axis vector of all columns (by design y points in the wrong direction so we correct it by *-1
 		y_axis = np.mean(y_axes,axis=0)*-1
@@ -213,7 +229,7 @@ class Calibrator:
 		if cal2 is not None:
 			cal2.T = T@cal2.T
 
-#Helper functions
+# Helper functions
 
 def to_affine(R,T):
 	"""Transforms a 3x3 rotation matrix and a Translation vector to an Affine transformation matrix."""
