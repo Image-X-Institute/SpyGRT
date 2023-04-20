@@ -194,7 +194,6 @@ class Tracker:
         result_icp = o3d_reg.multi_scale_icp(source, self._ref_surface, self._icp_config[0], self._icp_config[1],
                                              self._icp_config[2], self._t_guess, self._icp_config[3])
 
-
         if hasattr(o3d, 'cuda'):
             self._t_guess = result_icp.transformation.cuda()
         else:
