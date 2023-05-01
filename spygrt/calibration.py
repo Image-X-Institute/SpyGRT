@@ -58,7 +58,7 @@ class Calibrator:
             stream: Stream object for the camera to be calibrated.
         """
         # Stream object to query stream setting/parameters. Private as we want to control what method of the stream
-        # a Calibrator object can access. Potentially code breaking if
+        # a Calibrator object can access. Potentially code breaking if used to call get_frames().
         self._stream = stream
         # Intrinsic matrix of the camera
         # Pose of the camera - modified by the different calibration methods.
@@ -97,7 +97,7 @@ class Calibrator:
         if filename is None:
             filename = self._stream.serial + "_cal.txt"
 
-        np.savetxt(filename, self.T.numpy())
+        np.savetxt(filename, self.pose.cpu().numpy())
 
     def find_corners3d(self, frame, col=DEFAULT_COLUMN, rows=DEFAULT_ROW, draw=False):
         """
