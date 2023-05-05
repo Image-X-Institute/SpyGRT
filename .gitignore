@@ -12,3 +12,4 @@ Examples/.ipynb_checkpoints/CalibrationExample-checkpoint.ipynb
 **/*.txt
 *.PNG
 
+*.ply
