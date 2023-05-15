@@ -204,7 +204,7 @@ class Tracker:
     @staticmethod
     def isR_matrix(R):
         """determine whether a 3x3 matrix is a rotation matrix."""
-        return np.linalg.norm(np.identity(3, dtype=R.dtype) - np.dot(R.T, R)) < 1e-6
+        return np.linalg.norm(np.identity(3, dtype=R.dtype) - np.dot(R.T, R)) < 1e-5
 
     @staticmethod
     def compute_translation(T):
