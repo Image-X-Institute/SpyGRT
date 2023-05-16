@@ -30,13 +30,13 @@ import time
 from abc import ABC, abstractmethod
 
 
-# Setting up a logger that will write log messages in the 'stream.log' file.
-logger = logging.getLogger(__name__)
-fh = logging.FileHandler('stream.log', 'w', 'utf-8')
-fh.setLevel(logging.DEBUG)
-formatter = logging.Formatter('- %(module)s - %(levelname)-8s: %(message)s')
-fh.setFormatter(formatter)
-logger.addHandler(fh)
+# # Setting up a logger that will write log messages in the 'stream.log' file.
+# logger = logging.getLogger(__name__)
+# fh = logging.FileHandler('stream.log', 'w', 'utf-8')
+# fh.setLevel(logging.DEBUG)
+# formatter = logging.Formatter('- %(module)s - %(levelname)-8s: %(message)s')
+# fh.setFormatter(formatter)
+# logger.addHandler(fh)
 
 DEVICE = None
 if hasattr(o3d, 'cuda'):
@@ -126,6 +126,7 @@ class Camera(Stream):
             device: Realsense device object pointing to a camera(rs2.device).
         """
         self._frame = None
+        self._device = device
 
         if filename is not None:
             self.load_calibration(filename)
@@ -192,8 +193,8 @@ class Camera(Stream):
         except RuntimeError:
             logging.info("no minimum distance setting for camera model: " + self.model)
 
-            # Warmup
-            self.warmup()
+            # # Warmup
+            # self.warmup()
 
     @property
     def frame(self):
@@ -360,7 +361,7 @@ class Camera(Stream):
         for i in range(29):
             frames = self._pipe.wait_for_frames()
         self.warmed = True
-        self.intrinsics = frames.get_depth_frame().get_profile().as_video_stream_profile().intrinsics
+        self._intrinsics = frames.get_depth_frame().get_profile().as_video_stream_profile().intrinsics
 
     # Will be deprecated for using the intrinsics parameter.
     def o3d_intrinsics(self):
@@ -448,7 +449,7 @@ class Recording(Stream):
         self._cfg = rs2.config()
 
         # Configure the camera with the default setting.
-        self._cfg.enable_device_from_file(device, False)
+        self._cfg.enable_device_from_file(device, True)
 
         # Start the pipeline - Frame fetching is possible after this.
         pipe_profile = self._pipe.start(self._cfg)
@@ -481,8 +482,11 @@ class Recording(Stream):
         self._playback.set_real_time(False)
 
         # Pause to allow for the playback to update.
-        time.sleep(0.0001)
+        # time.sleep(0.0001)
         self._pipe.stop()
+
+        while self._playback.current_status() != rs2.playback_status.stopped:
+            time.sleep(0.01)
 
     @property
     def frame(self):
@@ -635,10 +639,11 @@ class Recording(Stream):
                 pass
             elif self._playback.current_status() == rs2.playback_status.stopped:
                 # Raise a specific realsense error if get_frames was called before start_stream or after end_stream
-                self._pipe.get_active_profile()
+                # self._pipe.get_active_profile()
 
                 # If the above statement doesn't raise an exception, assume we reached the end of the file.
-                raise NoMoreFrames("Reached the end of the stream")
+                # raise NoMoreFrames("Reached the end of the stream")
+                pass
         except AttributeError:
             pass
 
