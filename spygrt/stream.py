@@ -485,8 +485,15 @@ class Recording(Stream):
         # time.sleep(0.0001)
         self._pipe.stop()
 
-        while self._playback.current_status() != rs2.playback_status.stopped:
-            time.sleep(0.01)
+        # needs a max tries to avoid infinite loop. Seems to be a bug in RS2 where the status can 
+        # fail to reflect true state.
+        tries = 0
+        sleepDelay = 0.01
+        maxTries = 1.0/sleepDelay # max delay of 1 sec
+
+        while (self._playback.current_status() != rs2.playback_status.stopped) and tries < maxTries:
+            tries += 1
+            time.sleep(sleepDelay)
 
     @property
     def frame(self):
