@@ -8,3 +8,4 @@ Examples/.ipynb_checkpoints/CalibrationExample-checkpoint.ipynb
 /dist/*
 /.idea/*
 /Dev_Test/*.*
+/build/*
