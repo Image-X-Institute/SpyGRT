@@ -13,3 +13,4 @@ Examples/.ipynb_checkpoints/CalibrationExample-checkpoint.ipynb
 *.PNG
 
 *.ply
+build/lib/*
