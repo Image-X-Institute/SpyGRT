@@ -14,3 +14,4 @@ Examples/.ipynb_checkpoints/CalibrationExample-checkpoint.ipynb
 *.ply
 build/lib/*
 /Dev_test/*
+*.log
