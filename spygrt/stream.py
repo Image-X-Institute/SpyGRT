@@ -121,7 +121,6 @@ class Camera(Stream):
     def __init__(self, device, cal_file=None):
         """
         Initialise the camera settings and start the stream.
-
         Args:
             device(rs2.device): Realsense device object pointing to a camera(rs2.device).
             cal_file(string): Filepath to the calibration file
@@ -193,17 +192,12 @@ class Camera(Stream):
         except RuntimeError:
             logging.info("no minimum distance setting for camera model: " + self.model)
 
-        # Warmup
-        self.warmup()
-
     @property
     def frame(self):
         """
         Access the last frame.
-
         Returns:
             frame: A tuple containing the last frame ordered (depth, colour)
-
         """
         if self._frame is None:
             self._frame = self.get_frames()
@@ -213,7 +207,6 @@ class Camera(Stream):
     def pose(self):
         """
         Access the 4x4 matrix representing the camera pose.
-
         Returns:
             pose (numpy ndarray): a 4x4 matrix representing the camera to world transform
         """
@@ -225,14 +218,13 @@ class Camera(Stream):
             except OSError as e:
                 logging.error("Could not find the default calibration file for camera with serial number: "
                               + self.serial)
-                raise e
+                return o3d.core.Tensor(np.identity(4), dtype=o3d.core.Dtype.Float32, device=DEVICE).cpu().numpy()
         return self._pose
 
     @property
     def pcd(self):
         """
         Access the point cloud form of the current frame.
-
         Returns:
             pcd: A tensor-based Open3D point cloud object.
         """
@@ -244,7 +236,6 @@ class Camera(Stream):
     def pcd(self, pcd):
         """
         Ensures pcd is read-only
-
         Args:
             pcd: New point cloud
         """
@@ -255,10 +246,8 @@ class Camera(Stream):
     def intrinsics(self):
         """
             Access the camera's pinhole camera intrinsics.
-
             Returns:
                 intrinsics (o3d.t.Tensor): 3x3 pinhole camera intrinsics matrix
-
         """
         return o3d.core.Tensor([[self._intrinsics.fx, 0, self._intrinsics.ppx],
                                 [0, self._intrinsics.fy, self._intrinsics.ppy], [0, 0, 1]], device=DEVICE)
@@ -268,319 +257,40 @@ class Camera(Stream):
         """
             Conversation factor to go from raw depth data to depth in meters. It is = to 0.001 by default for
             Realsense cameras. Warning: Open3D's depth_scale is = 1/depth_scale.
-
         Returns:
             depth_scale (float): scaling factor to get depth from Z16 to depth in meters.
-
         """
         return self._depth_scale
+
+    @property
+    def timestamp(self):
+        """
+        Access the timestamp of the latest frame
+        Returns:
+            timestamp: Timestamp of the most recent frame (ms), averaged of the two streams' timestamp.
+        """
+
+        return self._timestamp
+
+    @timestamp.setter
+    def timestamp(self, timestamp):
+        """
+        Ensure timestamp is read-only.
+        Args:
+            timestamp: New timestamp
+        """
+        logger.warning("Tried to manually change the timestamp")
+        pass
 
     def compute_pcd(self, new_frame=False):
         """
          Computes a Point Cloud from the newest acquired frame.
-
          Args:
              new_frame (bool): to determine whether a new frame should be acquired first.
-
          Returns:
              pcd (Open3d.t.Geometry.PointCloud): The point cloud representation of the newest acquired frame in an
                 Open3D Tensor PointCloud format.
          """
-
-        if new_frame:
-            self.get_frames('rs')
-
-        self._rs_pc.map_to(self.frame[1])
-        # Get the raw point cloud data
-        dat = self._rs_pc.calculate(self.frame[0])
-        # Changes how the data is "viewed" without making changes to the memory. Results in a list of 3D coordinates
-        depth_dat = np.asanyarray(dat.get_vertices()).view(np.float32).reshape([-1, 3])
-        # Reformat the colour data into a list of RGB values
-        col_dat = np.asanyarray(self.frame[1].get_data()).reshape([-1, 3])
-
-        col_t = o3d.core.Tensor(col_dat, device=DEVICE)
-        depth_t = o3d.core.Tensor(depth_dat, device=DEVICE)
-
-        self._pcd.point["positions"] = depth_t
-        self._pcd.point["colors"] = col_t
-
-        if self._pose is not None:
-            self._pcd.transform(o3d.core.Tensor(self._pose, device=DEVICE))
-
-        return self._pcd
-
-    def load_calibration(self, filename=None):
-        """
-        Initiates the pose attribute from a calibration file.
-
-        Args:
-            filename: String containing the filename of the calibration file.
-
-        Returns:
-            pose (numpy ndarray): a 4x4 matrix representing the camera to world transform
-
-        """
-        if filename is None:
-            filename = self.serial + "_cal.txt"
-        self._pose = np.loadtxt(filename)
-
-        return self._pose
-
-    # Encoding will be deprecated later, for now used for backward compatibility
-    def get_frames(self, encoding='rs'):
-        """
-        Fetch an aligned depth and color frame.
-
-        Args:
-            encoding: a flag that determines the type of the returned frame.
-
-        Returns:
-            frame: a tuple with a depth and colour frame ordered (depth, colour). The type of the returned
-        frames depend on the input value for encoding.
-
-        """
-        """"""
-        if not self.warmed:
-            self.warmup()
-        frames = self._pipe.wait_for_frames()
-        aligned_frames = self.__align_to_color.process(frames)
-        rs_depth = aligned_frames.get_depth_frame()
-        rs_color = aligned_frames.get_color_frame()
-
-        if encoding == 'o3d':
-            np_depth = np.float32(rs_depth.get_data()) * 1 / 65535
-            np_color = np.asanyarray(rs_color.get_data())
-
-            depth = o3d.t.geometry.Image(o3d.core.Tensor(np_depth))
-            color = o3d.t.geometry.Image(o3d.core.Tensor(np_color))
-            self._frame = (depth, color)
-
-        else:
-            self._frame = (rs_depth, rs_color)
-        return self._frame
-
-    def warmup(self):
-        """"Warmup the camera before frame acquisition"""
-        self._pipe.start()
-        frames = self._pipe.wait_for_frames()
-        for i in range(29):
-            frames = self._pipe.wait_for_frames()
-        self._pipe.stop()
-        self.warmed = True
-        # self.intrinsics = frames.get_depth_frame().get_profile().as_video_stream_profile().intrinsics
-
-    def o3d_intrinsics(self):
-        """
-        Transform the camera intrinsics to an open_3D format.
-
-         Returns:
-            intrinsics(o3d.camera.PinholeCameraIntrinsic): Return the intrinsics of the camera in an open3D format.
-        """
-        return o3d.camera.PinholeCameraIntrinsic(self._intrinsics.width, self._intrinsics.height, self._intrinsics.fx,
-                                                 self._intrinsics.fy, self._intrinsics.ppx, self._intrinsics.ppy)
-
-    def get_rs_intrinsics(self):
-        """
-        Transform the camera intrinsics to an open_3D format.
-
-        Returns:
-            intrinsics: Return the intrinsics of the camera in a realsense format.
-        """
-
-        return self._intrinsics
-
-    def end_stream(self):
-        """End the stream."""
-        self._pipe.stop()
-        self.warmed = False
-
-    def start_stream(self, rec=False, bag_file=None):
-        """
-        Starts or restarts the stream.
-
-        Args:
-            rec: Bool to indicate whether a recording should be created
-            bag_file: filepath to the desired location for the recorded file.
-
-        """
-        if rec:
-            if bag_file is None:
-                bag_file = self.serial + '_' + time.localtime() + '.bag'
-            else:
-                try:
-                    if bag_file[-4:] != '.bag':
-                        bag_file = bag_file + '.bag'
-                except TypeError:
-                    logging.warning('filename of bag file is not a string, using default filename instead')
-                    bag_file = self.serial + time.localtime() + '.bag'
-            self._cfg.enable_record_to_file(bag_file)
-
-        self._pipe.start(self._cfg)
-
-
-class Recording(Stream):
-    """Class to handle the interaction with the Realsense API for realsense bag files."""
-
-    def __init__(self, device, filename=None):
-        """
-
-        Args:
-            device: link to a bag file containing a recording.
-        """
-        self._frame = None
-
-        if filename is not None:
-            self.load_calibration(filename)
-        else:
-            self._pose = None
-
-        # Realsense point cloud object useful for the compute_pcd method. For internal class use only.
-        self._rs_pc = rs2.pointcloud()
-
-        # Realsense threshold filter object for processing frames.
-        self._threshold_filter = rs2.threshold_filter(0.1, 1.3)
-
-        # Realsense spatial filter that lower noise and preserve edges.
-        self._spatial_filter = rs2.spatial_filter()
-
-        # A point cloud object representing the latest frame. Stored in a Open3D Tensor PointCloud format.
-        self._pcd = o3d.t.geometry.PointCloud(device=DEVICE)
-
-        # pipeline that controls the acquisition of frames.
-        self._pipe = rs2.pipeline()
-
-        # Initialise config object
-        self._cfg = rs2.config()
-
-        # Configure the camera with the default setting.
-        self._cfg.enable_device_from_file(device, False)
-
-        # Start the pipeline - Frame fetching is possible after this.
-        pipe_profile = self._pipe.start(self._cfg)
-
-        # Object that align depth and color.
-        self._align_to_color = rs2.align(rs2.stream.color)
-
-        # Device object to access metadata.
-        self._device = pipe_profile.get_device()
-
-        # Serial number of the camera that captured this stream.
-        self.serial = self._device.get_info(rs2.camera_info.serial_number)
-
-        # Model of the camera that captured this stream.
-        self.model = self._device.get_info(rs2.camera_info.name)
-
-        # Access unit in which the depth is saved
-        depth_sensor = self._device.first_depth_sensor()
-
-        self._depth_scale = depth_sensor.get_depth_scale()
-
-        # Pinhole camera intrinsics for depth camera
-        self._intrinsics = depth_sensor.get_stream_profiles()[0].as_video_stream_profile().intrinsics
-
-        # Specify that this device is from a captured stream
-        self._playback = self._device.as_playback()
-
-        # Enable frame by frame access
-        self._playback.set_real_time(False)
-
-        # Pause to allow for the playback to update.
-        time.sleep(0.0001)
-        self._pipe.stop()
-
-    @property
-    def frame(self):
-        """
-        Access the last frame.
-
-        Returns:
-            frame: A tuple containing the last frame ordered (depth, colour)
-
-        """
-        if self._frame is None:
-            self._frame = self.get_frames()
-        return self._frame
-
-    @property
-    def pose(self):
-        """
-        Access the 4x4 matrix representing the camera pose.
-
-        Returns:
-            pose (numpy ndarray): a 4x4 matrix representing the camera to world transform
-        """
-
-        if self._pose is None:
-            try:  # Try because we're calling load_calibration without a filename and using the default filename and
-                # location
-                self.load_calibration()
-            except OSError as e:
-                logging.error("Could not find the default calibration file for camera with serial number: "
-                              + self.serial)
-                raise e
-        return self._pose
-
-    @property
-    def pcd(self):
-        """
-        Access the point cloud form of the current frame.
-
-        Returns:
-            pcd: A tensor-based Open3D point cloud object.
-        """
-        if self._pcd.is_empty():
-            self.compute_pcd(False)
-
-        return self._pcd
-
-    @property
-    def intrinsics(self):
-        """
-            Access the camera's pinhole camera intrinsics.
-
-            Returns:
-                intrinsics (o3d.t.Tensor): 3x3 pinhole camera intrinsics matrix
-
-        """
-        return o3d.core.Tensor([[self._intrinsics.fx, 0, self._intrinsics.ppx],
-                                [0, self._intrinsics.fy, self._intrinsics.ppy], [0, 0, 1]], device=DEVICE)
-
-    @property
-    def depth_scale(self):
-        """
-            Conversation factor to go from raw depth data to depth in meters. It is = to 0.001 by default for
-            Realsense cameras. Warning: Open3D's depth_scale is = 1/depth_scale.
-
-        Returns:
-            depth_scale (float): scaling factor to get depth from Z16 to depth in meters.
-
-        """
-        if self._depth_scale is None:
-            self._depth_scale = self._device.first_depth_sensor().get_depth_scale()
-
-        return self._depth_scale
-
-    def seek(self, time_delta):
-        """
-
-        Args:
-            time_delta:
-
-        Returns:
-
-        """
-        self._playback.seek(time_delta)
-
-    def compute_pcd(self, new_frame=False):
-        """
-        Computes a Point Cloud from the newest acquired frame.
-
-        Args:
-            new_frame: Bool to determine whether a new frame should be acquired first.
-
-        Returns:
-            pcd: the point cloud representation of the newest acquired frame in an Open3D Tensor PointCloud format.
-        """
 
         if new_frame:
             self.get_frames('rs')
@@ -600,7 +310,8 @@ class Recording(Stream):
         else:
             rgbdim = o3d.t.geometry.RGBDImage(self.frame[1], self.frame[0])
             self._pcd = o3d.t.geometry.PointCloud.create_from_rgbd_image(rgbdim, self.intrinsics, depth_scale=1000,
-                                                                   depth_max=1.5)
+                                                                         depth_max=1.5)
+
         if self._pose is not None:
             self._pcd.transform(o3d.core.Tensor(self._pose, device=DEVICE))
 
@@ -609,13 +320,10 @@ class Recording(Stream):
     def load_calibration(self, filename=None):
         """
         Initiates the pose attribute from a calibration file.
-
         Args:
             filename: String containing the filename of the calibration file.
-
         Returns:
             pose (numpy ndarray): a 4x4 matrix representing the camera to world transform
-
         """
         if filename is None:
             filename = self.serial + "_cal.txt"
@@ -623,16 +331,302 @@ class Recording(Stream):
 
         return self._pose
 
+    # Encoding will be deprecated later, for now used for backward compatibility
     def get_frames(self, encoding='rs'):
         """
-        Fetch a new set of depth and colour frame.
-
+        Fetch an aligned depth and color frame.
         Args:
             encoding: a flag that determines the type of the returned frame.
         Returns:
             frame: a tuple with a depth and colour frame ordered (depth, colour). The type of the returned
         frames depend on the input value for encoding.
+        """
+        """"""
+        if not self.warmed:
+            self.warmup()
+        frames = self._pipe.wait_for_frames()
 
+        aligned_frames = self.__align_to_color.process(frames)
+
+        rs_depth = aligned_frames.get_depth_frame()
+        rs_color = aligned_frames.get_color_frame()
+        # Computationally intensive depth image filtering
+        # rs_depth = self._spatial_filter.process(rs_depth)
+        rs_depth = self._threshold_filter.process(rs_depth)
+        self._timestamp = rs_depth.timestamp
+        if encoding == 'o3d':
+            np_depth = np.asanyarray(rs_depth.get_data())
+            np_color = np.asanyarray(rs_color.get_data())
+            depth = o3d.t.geometry.Image(o3d.core.Tensor(np_depth, device=DEVICE))
+            color = o3d.t.geometry.Image(o3d.core.Tensor(np_color, device=DEVICE))
+            self._frame = (depth, color)
+
+        else:
+            self._frame = (rs_depth, rs_color)
+        return self._frame
+
+    def warmup(self):
+        """"Warmup the camera before frame acquisition"""
+        for i in range(30):
+            self._pipe.wait_for_frames()
+        self.warmed = True
+        # self.intrinsics = frames.get_depth_frame().get_profile().as_video_stream_profile().intrinsics
+
+    def o3d_intrinsics(self):
+        """
+        Transform the camera intrinsics to an open_3D format.
+         Returns:
+            intrinsics(o3d.camera.PinholeCameraIntrinsic): Return the intrinsics of the camera in an open3D format.
+        """
+        return o3d.camera.PinholeCameraIntrinsic(self._intrinsics.width, self._intrinsics.height, self._intrinsics.fx,
+                                                 self._intrinsics.fy, self._intrinsics.ppx, self._intrinsics.ppy)
+
+    def get_rs_intrinsics(self):
+        """
+        Transform the camera intrinsics to an open_3D format.
+        Returns:
+            intrinsics: Return the intrinsics of the camera in a realsense format.
+        """
+
+        return self._intrinsics
+
+    def end_stream(self):
+        """End the stream."""
+        self._pipe.stop()
+        self.warmed = False
+
+    def start_stream(self, rec=False, bag_file=None):
+        """
+        Starts or restarts the stream.
+        Args:
+            rec: Bool to indicate whether a recording should be created
+            bag_file: filepath to the desired location for the recorded file.
+        """
+        if rec:
+            if bag_file is None:
+                bag_file = self.serial + '_' + time.localtime() + '.bag'
+            else:
+                try:
+                    if bag_file[-4:] != '.bag':
+                        bag_file = bag_file + '.bag'
+                except TypeError:
+                    logging.warning('filename of bag file is not a string, using default filename instead')
+                    bag_file = self.serial + time.localtime() + '.bag'
+            self._cfg.enable_record_to_file(bag_file)
+
+        self._pipe.start(self._cfg)
+        self.warmup()
+
+
+class Recording(Stream):
+    """Class to handle the interaction with the Realsense API for realsense bag files."""
+
+    def __init__(self, device, filename=None):
+        """
+        Args:
+            device: link to a bag file containing a recording.
+        """
+        self._frame = None
+
+        if filename is not None:
+            self.load_calibration(filename)
+        else:
+            self._pose = None
+
+        self._timestamp = None
+
+        # Realsense point cloud object useful for the compute_pcd method. For internal class use only.
+        self._rs_pc = rs2.pointcloud()
+
+        # Realsense threshold filter object for processing frames.
+        self._threshold_filter = rs2.threshold_filter(0.1, 1.3)
+
+        # Realsense spatial filter that lower noise and preserve edges.
+        self._spatial_filter = rs2.spatial_filter()
+
+        # A point cloud object representing the latest frame. Stored in a Open3D Tensor PointCloud format.
+        self._pcd = o3d.t.geometry.PointCloud(device=DEVICE)
+
+        # Initialise config object
+        self._cfg = rs2.config()
+
+        # Configure the camera with the default setting.
+        self._cfg.enable_device_from_file(device, False)
+
+        ctx = rs2.context()
+
+        # Realsense device object to access device metadata.
+        self._device = ctx.load_device(device)
+
+        # pipeline that controls the acquisition of frames.
+        self._pipe = None
+
+        # Object that align depth and color.
+        self._align_to_color = rs2.align(rs2.stream.color)
+
+        # Serial number of the camera that captured this stream.
+        self.serial = self._device.get_info(rs2.camera_info.serial_number)
+
+        # Model of the camera that captured this stream.
+        self.model = self._device.get_info(rs2.camera_info.name)
+
+        # Access unit in which the depth is saved
+        depth_sensor = self._device.first_depth_sensor()
+
+        self._depth_scale = depth_sensor.get_depth_scale()
+
+        # Pinhole camera intrinsics for depth camera
+        self._intrinsics = depth_sensor.get_stream_profiles()[0].as_video_stream_profile().intrinsics
+
+        self._playback = None
+
+    @property
+    def frame(self):
+        """
+        Access the last frame.
+        Returns:
+            frame: A tuple containing the last frame ordered (depth, colour)
+        """
+        if self._frame is None:
+            self._frame = self.get_frames()
+        return self._frame
+
+    @property
+    def pose(self):
+        """
+        Access the 4x4 matrix representing the camera pose.
+        Returns:
+            pose (numpy ndarray): a 4x4 matrix representing the camera to world transform
+        """
+
+        if self._pose is None:
+            try:  # Try because we're calling load_calibration without a filename and using the default filename and
+                # location
+                self.load_calibration()
+            except OSError as e:
+                logging.error("Could not find the default calibration file for camera with serial number: "
+                              + self.serial)
+                raise e
+        return self._pose
+
+    @property
+    def pcd(self):
+        """
+        Access the point cloud form of the current frame.
+        Returns:
+            pcd: A tensor-based Open3D point cloud object.
+        """
+        if self._pcd.is_empty():
+            self.compute_pcd(False)
+
+        return self._pcd
+
+    @property
+    def intrinsics(self):
+        """
+            Access the camera's pinhole camera intrinsics.
+            Returns:
+                intrinsics (o3d.t.Tensor): 3x3 pinhole camera intrinsics matrix
+        """
+        return o3d.core.Tensor([[self._intrinsics.fx, 0, self._intrinsics.ppx],
+                                [0, self._intrinsics.fy, self._intrinsics.ppy], [0, 0, 1]], device=DEVICE)
+
+    @property
+    def depth_scale(self):
+        """
+            Conversation factor to go from raw depth data to depth in meters. It is = to 0.001 by default for
+            Realsense cameras. Warning: Open3D's depth_scale is = 1/depth_scale.
+        Returns:
+            depth_scale (float): scaling factor to get depth from Z16 to depth in meters.
+        """
+        if self._depth_scale is None:
+            self._depth_scale = self._device.first_depth_sensor().get_depth_scale()
+
+        return self._depth_scale
+
+    @property
+    def timestamp(self):
+        """
+        Access the timestamp of the latest frame
+        Returns:
+            timestamp: Timestamp of the most recent frame (ms), averaged of the two streams' timestamp.
+        """
+
+        return self._timestamp
+
+    @timestamp.setter
+    def timestamp(self, timestamp):
+        """
+        Ensure timestamp is read-only.
+        Args:
+            timestamp: New timestamp
+        """
+        logger.warning("Tried to manually change the timestamp")
+        pass
+
+    def seek(self, time_delta):
+        """
+        Args:
+            time_delta:
+        Returns:
+        """
+        self._playback.seek(time_delta)
+
+    def compute_pcd(self, new_frame=False):
+        """
+        Computes a Point Cloud from the newest acquired frame.
+        Args:
+            new_frame: Bool to determine whether a new frame should be acquired first.
+        Returns:
+            pcd: the point cloud representation of the newest acquired frame in an Open3D Tensor PointCloud format.
+        """
+
+        if new_frame:
+            self.get_frames('o3d')
+
+        if type(self.frame[0]) == rs2.depth_frame or type(self.frame[0]) == rs2.frame:
+            self._rs_pc.map_to(self.frame[1])
+            # Get the raw point cloud data
+            dat = self._rs_pc.calculate(self.frame[0])
+            # Changes how the data is "viewed" without making changes to the memory. Results in a list of 3D coordinates
+            depth_dat = np.asanyarray(dat.get_vertices()).view(np.float32).reshape([-1, 3])
+            # Reformat the colour data into a list of RGB values
+            col_dat = np.asanyarray(self.frame[1].get_data()).reshape([-1, 3])
+            col_t = o3d.core.Tensor(col_dat, device=DEVICE)
+            depth_t = o3d.core.Tensor(depth_dat, device=DEVICE)
+            self._pcd.point["positions"] = depth_t
+            self._pcd.point["colors"] = col_t
+        else:
+            rgbdim = o3d.t.geometry.RGBDImage(self.frame[1], self.frame[0])
+            self._pcd = o3d.t.geometry.PointCloud.create_from_rgbd_image(rgbdim, self.intrinsics, depth_scale=1000,
+                                                                         depth_max=1.5)
+        if self._pose is not None:
+            self._pcd.transform(o3d.core.Tensor(self._pose, device=DEVICE))
+
+        return self._pcd
+
+    def load_calibration(self, filename=None):
+        """
+        Initiates the pose attribute from a calibration file.
+        Args:
+            filename: String containing the filename of the calibration file.
+        Returns:
+            pose (numpy ndarray): a 4x4 matrix representing the camera to world transform
+        """
+        if filename is None:
+            filename = self.serial + "_cal.txt"
+        self._pose = np.loadtxt(filename)
+
+        return self._pose
+
+    def get_frames(self, encoding='o3d'):
+        """
+        Fetch a new set of depth and colour frame.
+        Args:
+            encoding: a flag that determines the type of the returned frame.
+        Returns:
+            frame: a tuple with a depth and colour frame ordered (depth, colour). The type of the returned
+        frames depend on the input value for encoding.
         """
         try:
             if not self._playback.current_status() == rs2.playback_status.stopped and self._frame is None:
@@ -655,11 +649,11 @@ class Recording(Stream):
         # Computationally intensive depth image filtering
         # rs_depth = self._spatial_filter.process(rs_depth)
         rs_color = aligned_frames.get_color_frame()
-
+        self._timestamp = rs_depth.timestamp
         if encoding == 'o3d':
-            np_depth = np.asanyarray(frames[0].get_data())
-            np_color = np.asanyarray(frames[1].get_data())
-            depth = o3d.t.geometry.Image(o3d.core.Tensor(np_depth, device=DEVICE))
+            np_depth = np.asanyarray(rs_depth.get_data())
+            np_color = np.asanyarray(rs_color.get_data())
+            depth = o3d.t.geometry.Image(o3d.core.Tensor(np_depth, device=DEVICE)).filter_bilateral(7, 0.05, 10)
             color = o3d.t.geometry.Image(o3d.core.Tensor(np_color, device=DEVICE))
             self._frame = (depth, color)
         else:
@@ -670,7 +664,6 @@ class Recording(Stream):
     def get_o3d_intrinsics(self):
         """
         Transform the camera intrinsics to an open_3D format.
-
          Returns:
             intrinsics(o3d.camera.PinholeCameraIntrinsic): Return the intrinsics of the camera in an open3D format.
         """
@@ -681,7 +674,6 @@ class Recording(Stream):
     def get_rs_intrinsics(self):
         """
             Transform the camera intrinsics to an open_3D format.
-
              Returns:
                 intrinsics: Return the intrinsics of the camera in a realsense format.
         """
@@ -691,16 +683,21 @@ class Recording(Stream):
     def end_stream(self):
         """End the stream."""
         self._pipe.stop()
+        while self._playback.current_status() != rs2.playback_status.stopped:
+            time.sleep(0.01)
 
     def start_stream(self):
         """Starts or restarts the stream."""
+        # Specify that this device is from a captured stream
+        self._pipe = rs2.pipeline()
+        pipe_profile = self._pipe.start(self._cfg)
+        self._device = pipe_profile.get_device()
+        self._playback = self._device.as_playback()
 
-        if self._playback.current_status() != rs2.playback_status.stopped:
-            logging.warning('Tried to start a stream that is already started')
-            return self._playback
-        self._pipe.start(self._cfg)
-        # Pause to allow for the playback to update.
-        time.sleep(0.0001)
+        # Enable frame by frame access
+        self._playback.set_real_time(False)
+        while self._playback.current_status() != rs2.playback_status.playing:
+            time.sleep(0.01)
 
 
 class DualStream(Stream, ABC):
@@ -723,7 +720,6 @@ class DualStream(Stream, ABC):
     def frame(self, new_frame):
         """
             Ensures that the frame attribute is only modified by fetching a new frame from the camera.
-
             Args:
                 new_frame: New frame to replace existing frame.
         """
@@ -822,10 +818,8 @@ class DualRecording(DualStream):
     def stream1(self):
         """
             Access the first stream.
-
         Returns:
             stream1: The first stream.
-
         """
         return self._stream1
 
@@ -833,10 +827,8 @@ class DualRecording(DualStream):
     def stream2(self):
         """
             Access the second stream.
-
         Returns:
             stream2: The first stream.
-
         """
         return self._stream2
 
@@ -844,10 +836,8 @@ class DualRecording(DualStream):
     def frame(self):
         """
         Access the last frame.
-
         Returns:
             frame: A tuple containing the last frame ordered (depth, colour)
-
         """
         if self._frame is None:
             self._frame = self.get_frames()
@@ -857,7 +847,6 @@ class DualRecording(DualStream):
     def pose(self):
         """
         Access the 4x4 matrices representing the cameras' poses.
-
         Returns:
             pose (numpy ndarray): a tuple of 4x4 matrix representing the cameras to world transform
         """
@@ -873,7 +862,6 @@ class DualRecording(DualStream):
     def pcd(self):
         """
         Access the point cloud form of the current frame.
-
         Returns:
             pcd: A tensor-based Open3D point cloud object.
         """
@@ -886,7 +874,6 @@ class DualRecording(DualStream):
     def pcd(self, pcd):
         """
         Ensures pcd is read-only
-
         Args:
             pcd: New point cloud
         """
@@ -897,7 +884,6 @@ class DualRecording(DualStream):
     def timestamp(self):
         """
         Access the timestamp of the latest frame
-
         Returns:
             timestamp: Timestamp of the most recent frame (ms), averaged of the two streams' timestamp.
         """
@@ -908,7 +894,6 @@ class DualRecording(DualStream):
     def timestamp(self, timestamp):
         """
         Ensure timestamp is read-only.
-
         Args:
             timestamp: New timestamp
         """
@@ -917,12 +902,9 @@ class DualRecording(DualStream):
 
     def seek(self, time_delta):
         """
-
         Args:
             time_delta:
-
         Returns:
-
         """
         self.stream1.seek(time_delta)
         self.stream2.seek(time_delta)
@@ -930,10 +912,8 @@ class DualRecording(DualStream):
     def compute_pcd(self, new_frame=False):
         """
         Computes a Point Cloud from the newest acquired frame.
-
         Args:
             new_frame: Bool to determine whether a new frame should be acquired first.
-
         Returns:
             pcd: the point cloud representation of the newest acquired frame in an Open3D Tensor PointCloud format.
         """
@@ -957,10 +937,9 @@ class DualRecording(DualStream):
         self._pcd = pcd1 + pcd2
         return self._pcd
 
-    def load_calibration(self, filename=None):
+    def load_calibration(self, filename=None, force=False):
         """
         Uses each stream's load_calibration method to initiate their pose attribute.
-
         Args:
             filename: list of two strings containing the filename of the calibration files.
         """
@@ -979,53 +958,57 @@ class DualRecording(DualStream):
                     logging.error("Could not complete calibration with default filename for DualStream object")
                     raise DualStreamError("Tried to complete default calibration but could not find calibration files")
         else:
-            try:
-                if self.stream1.pose is not None:
-                    pose1 = self.stream1.pose
-                else:
+            if force is False:
+                try:
+                    if self.stream1.pose is not None:
+                        pose1 = self.stream1.pose
+                    else:
+                        pose1 = self.stream1.load_calibration()
+                    if self.stream2.pose is not None:
+                        pose2 = self.stream2.pose
+                    else:
+                        pose2 = self.stream2.load_calibration()
+                except OSError:
+                    logging.error("Could not complete calibration with default filename for DualStream object")
+                    raise DualStreamError("Tried to complete default calibration but could not find calibration files")
+            else:
+                try:
                     pose1 = self.stream1.load_calibration()
-                if self.stream2.pose is not None:
-                    pose2 = self.stream2.pose
-                else:
                     pose2 = self.stream2.load_calibration()
-            except OSError:
-                logging.error("Could not complete calibration with default filename for DualStream object")
-                raise DualStreamError("Tried to complete default calibration but could not find calibration files")
+                except OSError:
+                    logging.error("Could not complete calibration with default filename for DualStream object")
+                    raise DualStreamError("Tried to complete default calibration but could not find calibration files")
 
         self._pose = (pose1, pose2)
         return self._pose
 
-    def get_frames(self):
+    def get_frames(self, encoding='o3d'):
         """
             Fetch new frame and ensure temporal alignment.
-
         Returns:
             frame:Tuple containing two sets of (depth,colour) frames, 1 for each stream.
-
         """
         # Getting new frames with a call  to the cameras.
-        f1 = self._stream1.get_frames(encoding='rs')
-        f2 = self._stream2.get_frames(encoding='rs')
+        f1 = self._stream1.get_frames(encoding=encoding)
+        f2 = self._stream2.get_frames(encoding=encoding)
 
         # Get the delay between the depth frames of each camera
-        diff = f2[0].timestamp - f1[0].timestamp
+        diff = self.stream2.timestamp - self.stream1.timestamp
         # If delay is more than 30ms, figure out which camera is behind and call new frames from that camera until
         # Both cameras are synchronised.
         while np.abs(diff) > 100:
             if diff > 100:
-                print("Timestamps:" + str(f1[0].timestamp) + " " + str(f1[0].frame_number) + " "
-                      + str(f2[0].timestamp) + " " + str(f2[0].frame_number))
-                f1 = self._stream1.get_frames(encoding='rs')
-                diff = f2[0].timestamp - f1[0].timestamp
+                print("Timestamps:" + str(self.stream1.timestamp) + " " + str(self.stream2.timestamp))
+                f1 = self._stream1.get_frames(encoding=encoding)
+                diff = self.stream2.timestamp - self.stream1.timestamp
                 continue
             elif diff < -100:
-                print("Timestamps:" + str(f1[0].timestamp) + " " + str(f1[0].frame_number) + " "
-                      + str(f2[0].timestamp) + " " + str(f2[0].frame_number))
-                f2 = self._stream2.get_frames(encoding='rs')
-                diff = f2[0].timestamp - f1[0].timestamp
+                print("Timestamps:" + str(self.stream1.timestamp) + " " + str(self.stream2.timestamp))
+                f2 = self._stream2.get_frames(encoding=encoding)
+                diff = self.stream2.timestamp - self.stream1.timestamp
                 continue
 
-        self._timestamp = (f1[0].timestamp + f2[0].timestamp)/2
+        self._timestamp = (self.stream1.timestamp + self.stream2.timestamp)/2
         self._frame = (f1, f2)
         return self._frame
 
@@ -1090,10 +1073,8 @@ class DualCamera(DualStream):
     def stream1(self):
         """
             Access the first stream.
-
         Returns:
             stream1: The first stream.
-
         """
         return self._stream1
 
@@ -1101,10 +1082,8 @@ class DualCamera(DualStream):
     def stream2(self):
         """
             Access the second stream.
-
         Returns:
             stream2: The first stream.
-
         """
         return self._stream2
 
@@ -1112,10 +1091,8 @@ class DualCamera(DualStream):
     def frame(self):
         """
         Access the last frame.
-
         Returns:
             frame: A tuple containing the last frame ordered (depth, colour)
-
         """
         if self._frame is None:
             self._frame = self.get_frames()
@@ -1125,7 +1102,6 @@ class DualCamera(DualStream):
     def pose(self):
         """
         Access the 4x4 matrices representing the cameras' poses.
-
         Returns:
             pose (numpy ndarray): a tuple of 4x4 matrix representing the cameras to world transform
         """
@@ -1141,7 +1117,6 @@ class DualCamera(DualStream):
     def pcd(self):
         """
         Access the point cloud form of the current frame.
-
         Returns:
             pcd: A tensor-based Open3D point cloud object.
         """
@@ -1154,7 +1129,6 @@ class DualCamera(DualStream):
     def pcd(self, pcd):
         """
         Ensures pcd is read-only
-
         Args:
             pcd: New point cloud
         """
@@ -1165,7 +1139,6 @@ class DualCamera(DualStream):
     def timestamp(self):
         """
         Access the timestamp of the latest frame
-
         Returns:
             timestamp: Timestamp of the most recent frame (ms), averaged of the two streams' timestamp.
         """
@@ -1176,7 +1149,6 @@ class DualCamera(DualStream):
     def timestamp(self, timestamp):
         """
         Ensure timestamp is read-only.
-
         Args:
             timestamp: New timestamp
         """
@@ -1186,10 +1158,8 @@ class DualCamera(DualStream):
     def compute_pcd(self, new_frame=False):
         """
         Computes a Point Cloud from the newest acquired frame.
-
         Args:
             new_frame: Bool to determine whether a new frame should be acquired first.
-
         Returns:
             pcd: the point cloud representation of the newest acquired frame in an Open3D Tensor PointCloud format.
         """
@@ -1216,7 +1186,6 @@ class DualCamera(DualStream):
     def load_calibration(self, filename=None):
         """
         Uses each stream's load_calibration method to initiate their pose attribute.
-
         Args:
             filename: list of two strings containing the filename of the calibration files.
         """
@@ -1251,17 +1220,15 @@ class DualCamera(DualStream):
         self._pose = (pose1, pose2)
         return self._pose
 
-    def get_frames(self):
+    def get_frames(self, encoding='o3d'):
         """
             Fetch new frame and ensure temporal alignment.
-
         Returns:
             frame:Tuple containing two sets of (depth,colour) frames, 1 for each stream.
-
         """
         # Getting new frames with a call  to the cameras.
-        f1 = self._stream1.get_frames(encoding='rs')
-        f2 = self._stream2.get_frames(encoding='rs')
+        f1 = self._stream1.get_frames(encoding=encoding)
+        f2 = self._stream2.get_frames(encoding=encoding)
 
         # There should be no delays for Cameras, so this section may be obsolete:
 
@@ -1283,18 +1250,16 @@ class DualCamera(DualStream):
         #         diff = f2[0].timestamp - f1[0].timestamp
         #         continue
 
-        self._timestamp = (f1[0].timestamp + f2[0].timestamp)/2
+        self._timestamp = (self.stream1.timestamp + self.stream2.timestamp)/2
         self._frame = (f1, f2)
         return self._frame
 
     def start_stream(self, rec=False, bag_file=None):
         """
         Starts or restarts the stream by starting both stream1 and stream2.
-
         Args:
             rec(bool): Indicates whether a recording should be created
             bag_file(list:string): Filepath to where the bag_files should be recorded
-
         """
         if rec:
             if bag_file is None:
