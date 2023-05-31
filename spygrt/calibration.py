@@ -124,18 +124,18 @@ class Calibrator:
                 depth = np.asanyarray(frame[0].get_data()) * 0.001
                 color = np.asanyarray(frame[1].get_data())
 
-        ret, corners = cv.findChessboardCorners(color, [col, rows], corners,
-                                                cv.CALIB_CB_FAST_CHECK)
+            ret, corners = cv.findChessboardCorners(color, [col, rows], corners,
+                                                    cv.CALIB_CB_FAST_CHECK)
 
-        if corners is None:
-            return None, None, False
+            if corners is None:
+                return None, None, False
 
-        corners3d = []
+            corners3d = []
 
-        for corner in corners:
-            pixel = [int(np.rint(corner[0][1])), int(np.rint(corner[0][0]))]
-            corners3d.append(rs2.rs2_deproject_pixel_to_point(self._stream.get_rs_intrinsics(), corner[0],
-                                                              float(depth[pixel[0], pixel[1]])))
+            for corner in corners:
+                pixel = [int(np.rint(corner[0][1])), int(np.rint(corner[0][0]))]
+                corners3d.append(rs2.rs2_deproject_pixel_to_point(self._stream.get_rs_intrinsics(), corner[0],
+                                                                float(depth[pixel[0], pixel[1]])))
 
             corners3d = np.asarray(corners3d)
 
