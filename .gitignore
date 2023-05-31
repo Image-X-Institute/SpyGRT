@@ -7,8 +7,11 @@ __pycache__/*
 Examples/.ipynb_checkpoints/CalibrationExample-checkpoint.ipynb
 /dist/*
 /.idea/*
-**/*.pcd
-**/track.txt
+*.pcd
 **/*.txt
 *.PNG
 
+*.ply
+build/lib/*
+/Dev_test/*
+*.log
