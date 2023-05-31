@@ -659,8 +659,8 @@ class Recording(Stream):
         aligned_frames = self._align_to_color.process(frames)
 
         rs_depth = aligned_frames.get_depth_frame()
-        rs_depth = self._threshold_filter.process(rs_depth)
-        rs_depth = self._spatial_filter.process(rs_depth)
+        # rs_depth = self._threshold_filter.process(rs_depth)
+        # rs_depth = self._spatial_filter.process(rs_depth)
         rs_color = aligned_frames.get_color_frame()
 
         if encoding == 'o3d':

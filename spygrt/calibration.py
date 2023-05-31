@@ -132,7 +132,12 @@ class Calibrator:
 
         ret, corners = cv.findChessboardCorners(color, [col, rows], corners,
                                                 cv.CALIB_CB_FAST_CHECK)
+
+        if corners is None:
+            return None, None, False
+
         corners3d = []
+
         for corner in corners:
             pixel = [int(np.rint(corner[0][1])), int(np.rint(corner[0][0]))]
             corners3d.append(rs2.rs2_deproject_pixel_to_point(self._stream.get_rs_intrinsics(), corner[0],
@@ -144,7 +149,7 @@ class Calibrator:
             color = o3d.t.geometry.Image(o3d.core.Tensor(cv.drawChessboardCorners(color, [col, rows], corners, ret),
                                                          device=DEVICE))
         self.corners.append(corners3d)
-        return corners3d
+        return corners3d, corners, ret
 
     def avg_corners(self, force=False):
         if self._mean_corners is None or force:
