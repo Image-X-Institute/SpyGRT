@@ -30,13 +30,13 @@ import time
 from abc import ABC, abstractmethod
 
 
-# Setting up a logger that will write log messages in the 'stream.log' file.
-logger = logging.getLogger(__name__)
-fh = logging.FileHandler('stream.log', 'w', 'utf-8')
-fh.setLevel(logging.DEBUG)
-formatter = logging.Formatter('- %(module)s - %(levelname)-8s: %(message)s')
-fh.setFormatter(formatter)
-logger.addHandler(fh)
+# # Setting up a logger that will write log messages in the 'stream.log' file.
+# logger = logging.getLogger(__name__)
+# fh = logging.FileHandler('stream.log', 'w', 'utf-8')
+# fh.setLevel(logging.DEBUG)
+# formatter = logging.Formatter('- %(module)s - %(levelname)-8s: %(message)s')
+# fh.setFormatter(formatter)
+# logger.addHandler(fh)
 
 DEVICE = None
 if hasattr(o3d, 'cuda'):
@@ -127,6 +127,7 @@ class Camera(Stream):
         """
         # Initialising frame attribute.
         self._frame = None
+        self._device = device
 
         if cal_file is not None:
             self.load_calibration(cal_file)
@@ -451,7 +452,7 @@ class Recording(Stream):
         self._cfg = rs2.config()
 
         # Configure the camera with the default setting.
-        self._cfg.enable_device_from_file(device, False)
+        self._cfg.enable_device_from_file(device, True)
 
         ctx = rs2.context()
 
@@ -633,10 +634,11 @@ class Recording(Stream):
                 pass
             elif self._playback.current_status() == rs2.playback_status.stopped:
                 # Raise a specific realsense error if get_frames was called before start_stream or after end_stream
-                self._pipe.get_active_profile()
+                # self._pipe.get_active_profile()
 
                 # If the above statement doesn't raise an exception, assume we reached the end of the file.
-                raise NoMoreFrames("Reached the end of the stream")
+                # raise NoMoreFrames("Reached the end of the stream")
+                pass
         except AttributeError:
             pass
 
@@ -653,7 +655,7 @@ class Recording(Stream):
         if encoding == 'o3d':
             np_depth = np.asanyarray(rs_depth.get_data())
             np_color = np.asanyarray(rs_color.get_data())
-            depth = o3d.t.geometry.Image(o3d.core.Tensor(np_depth, device=DEVICE)).filter_bilateral(7, 0.05, 10)
+            depth = o3d.t.geometry.Image(o3d.core.Tensor(np_depth.astype(np.float32), device=DEVICE)).filter_bilateral(7, 0.05, 10)
             color = o3d.t.geometry.Image(o3d.core.Tensor(np_color, device=DEVICE))
             self._frame = (depth, color)
         else:
