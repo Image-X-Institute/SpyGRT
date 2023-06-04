@@ -140,7 +140,9 @@ class Calibrator:
             corners3d = np.asarray(corners3d)
 
             self.corners.append(corners3d)
-            return corners3d
+
+            return corners3d, corners, ret
+
         else:
             pcd = self._stream.compute_pcd()
             ext = o3d.core.Tensor(np.identity(4), dtype=o3d.core.Dtype.Float64)
@@ -153,9 +155,10 @@ class Calibrator:
             ret, corners = cv.findChessboardCorners(color, [col, rows], corners,
                                                     cv.CALIB_CB_FAST_CHECK)
             if corners is None:
-                self.corners = rgbd
+                self.corners = rgbd # how does this work if the chessboard is not found?
 
             corners3d = []
+
             for corner in corners:
                 [u, v] = [int(np.rint(corner[0][1])), int(np.rint(corner[0][0]))]
                 corners3d.append(self._stream.intrinsics.inv() @ (
@@ -165,8 +168,10 @@ class Calibrator:
                                  to(dtype=o3d.core.Dtype.Float64))
 
                 corners3d = np.asarray(corners3d)
+
                 self.corners.append(corners3d)
-                return corners3d
+
+                return corners3d, corners, ret
 
     def avg_corners(self, force=False):
         if self._mean_corners is None or force:

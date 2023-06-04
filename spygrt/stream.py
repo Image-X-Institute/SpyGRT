@@ -137,6 +137,9 @@ class Camera(Stream):
         # Realsense point cloud object useful for the compute_pcd method. For internal class use only.
         self._rs_pc = rs2.pointcloud()
 
+        # Realsense threshold filter object for processing frames.
+        self._threshold_filter = rs2.threshold_filter(0.1, 5)#(0.1, 1.3)
+
         # A point cloud object representing the latest frame. Stored in a Open3D Tensor PointCloud format.
         self._pcd = o3d.t.geometry.PointCloud(device=DEVICE)
 
@@ -353,7 +356,11 @@ class Camera(Stream):
         rs_color = aligned_frames.get_color_frame()
         # Computationally intensive depth image filtering
         # rs_depth = self._spatial_filter.process(rs_depth)
-        rs_depth = self._threshold_filter.process(rs_depth)
+
+        # apply thresholding if defined
+        if self._threshold_filter is not None:
+            rs_depth = self._threshold_filter.process(rs_depth)
+
         self._timestamp = rs_depth.timestamp
         if encoding == 'o3d':
             np_depth = np.asanyarray(rs_depth.get_data())
