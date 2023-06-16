@@ -127,6 +127,7 @@ class Camera(Stream):
         """
         # Initialising frame attribute.
         self._frame = None
+        self._timestamp = None
         self._device = device
 
         if cal_file is not None:
@@ -139,6 +140,8 @@ class Camera(Stream):
 
         # A point cloud object representing the latest frame. Stored in a Open3D Tensor PointCloud format.
         self._pcd = o3d.t.geometry.PointCloud(device=DEVICE)
+
+        self._threshold_filter = rs2.threshold_filter(0.1, 1.3)
 
         # Initialise serial number early as it is needed for Stream configuration
         self.serial = device.get_info(rs2.camera_info.serial_number)
@@ -219,7 +222,7 @@ class Camera(Stream):
             except OSError as e:
                 logging.error("Could not find the default calibration file for camera with serial number: "
                               + self.serial)
-                return o3d.core.Tensor(np.identity(4), dtype=o3d.core.Dtype.Float32, device=DEVICE).cpu().numpy()
+                return o3d.core.Tensor(np.identity(4), dtype=o3d.core.Dtype.Float32, device=DEVICE)
         return self._pose
 
     @property
@@ -240,7 +243,7 @@ class Camera(Stream):
         Args:
             pcd: New point cloud
         """
-        logger.warning("tried to manually set a new point cloud")
+        logging.warning("tried to manually set a new point cloud")
         pass
 
     @property
@@ -280,7 +283,7 @@ class Camera(Stream):
         Args:
             timestamp: New timestamp
         """
-        logger.warning("Tried to manually change the timestamp")
+        logging.warning("Tried to manually change the timestamp")
         pass
 
     def compute_pcd(self, new_frame=False):
@@ -294,7 +297,7 @@ class Camera(Stream):
          """
 
         if new_frame:
-            self.get_frames('rs')
+            self.get_frames('o3d')
 
         if type(self.frame[0]) == rs2.depth_frame or type(self.frame[0]) == rs2.frame:
             self._rs_pc.map_to(self.frame[1])
@@ -310,11 +313,14 @@ class Camera(Stream):
             self._pcd.point["colors"] = col_t
         else:
             rgbdim = o3d.t.geometry.RGBDImage(self.frame[1], self.frame[0])
-            self._pcd = o3d.t.geometry.PointCloud.create_from_rgbd_image(rgbdim, self.intrinsics, depth_scale=1000,
-                                                                         depth_max=1.5)
-
-        if self._pose is not None:
-            self._pcd.transform(o3d.core.Tensor(self._pose, device=DEVICE))
+            if self._pose is None:
+                self._pcd = o3d.t.geometry.PointCloud.create_from_rgbd_image(rgbdim, self.intrinsics, depth_scale=1000,
+                                                                             depth_max=1.5)
+            else:
+                self._pcd = o3d.t.geometry.PointCloud.create_from_rgbd_image(rgbdim, self.intrinsics,
+                                                                             extrinsics=self.pose.inv(),
+                                                                             depth_scale=1000,
+                                                                             depth_max=1.5)
 
         return self._pcd
 
@@ -328,16 +334,17 @@ class Camera(Stream):
         """
         if filename is None:
             filename = self.serial + "_cal.txt"
-        self._pose = np.loadtxt(filename)
+        self._pose = o3d.core.Tensor(np.loadtxt(filename), device=DEVICE)
 
         return self._pose
 
     # Encoding will be deprecated later, for now used for backward compatibility
-    def get_frames(self, encoding='rs'):
+    def get_frames(self, encoding='o3d', filtering=True):
         """
         Fetch an aligned depth and color frame.
         Args:
-            encoding: a flag that determines the type of the returned frame.
+            encoding(List[char]): a flag that determines the type of the returned frame.
+            filtering(bool): Filters are turned on if set to True
         Returns:
             frame: a tuple with a depth and colour frame ordered (depth, colour). The type of the returned
         frames depend on the input value for encoding.
@@ -351,8 +358,6 @@ class Camera(Stream):
 
         rs_depth = aligned_frames.get_depth_frame()
         rs_color = aligned_frames.get_color_frame()
-        # Computationally intensive depth image filtering
-        # rs_depth = self._spatial_filter.process(rs_depth)
         rs_depth = self._threshold_filter.process(rs_depth)
         self._timestamp = rs_depth.timestamp
         if encoding == 'o3d':
@@ -452,7 +457,7 @@ class Recording(Stream):
         self._cfg = rs2.config()
 
         # Configure the camera with the default setting.
-        self._cfg.enable_device_from_file(device, True)
+        self._cfg.enable_device_from_file(device, False)
 
         ctx = rs2.context()
 
@@ -507,7 +512,7 @@ class Recording(Stream):
             except OSError as e:
                 logging.error("Could not find the default calibration file for camera with serial number: "
                               + self.serial)
-                raise e
+                return o3d.core.Tensor(np.identity(4), dtype=o3d.core.Dtype.Float32, device=DEVICE)
         return self._pose
 
     @property
@@ -562,7 +567,7 @@ class Recording(Stream):
         Args:
             timestamp: New timestamp
         """
-        logger.warning("Tried to manually change the timestamp")
+        logging.warning("Tried to manually change the timestamp")
         pass
 
     def seek(self, time_delta):
@@ -602,7 +607,7 @@ class Recording(Stream):
             self._pcd = o3d.t.geometry.PointCloud.create_from_rgbd_image(rgbdim, self.intrinsics, depth_scale=1000,
                                                                          depth_max=1.5)
         if self._pose is not None:
-            self._pcd.transform(o3d.core.Tensor(self._pose, device=DEVICE))
+            self._pcd.transform(self._pose)
 
         return self._pcd
 
@@ -616,15 +621,16 @@ class Recording(Stream):
         """
         if filename is None:
             filename = self.serial + "_cal.txt"
-        self._pose = np.loadtxt(filename)
+        self._pose = o3d.core.Tensor(np.loadtxt(filename), device=DEVICE)
 
         return self._pose
 
-    def get_frames(self, encoding='o3d'):
+    def get_frames(self, encoding='o3d', filtering=True):
         """
         Fetch a new set of depth and colour frame.
         Args:
-            encoding: a flag that determines the type of the returned frame.
+            encoding(List[char]): a flag that determines the type of the returned frame.
+            filtering(bool): Filters are turned on if set to True
         Returns:
             frame: a tuple with a depth and colour frame ordered (depth, colour). The type of the returned
         frames depend on the input value for encoding.
@@ -648,8 +654,6 @@ class Recording(Stream):
 
         rs_depth = aligned_frames.get_depth_frame()
         rs_depth = self._threshold_filter.process(rs_depth)
-        # Computationally intensive depth image filtering
-        # rs_depth = self._spatial_filter.process(rs_depth)
         rs_color = aligned_frames.get_color_frame()
         self._timestamp = rs_depth.timestamp
         if encoding == 'o3d':
@@ -879,7 +883,7 @@ class DualRecording(DualStream):
         Args:
             pcd: New point cloud
         """
-        logger.warning("tried to manually set a new point cloud")
+        logging.warning("tried to manually set a new point cloud")
         pass
 
     @property
@@ -899,7 +903,7 @@ class DualRecording(DualStream):
         Args:
             timestamp: New timestamp
         """
-        logger.warning("Tried to manually change the timestamp")
+        logging.warning("Tried to manually change the timestamp")
         pass
 
     def seek(self, time_delta):
@@ -944,6 +948,8 @@ class DualRecording(DualStream):
         Uses each stream's load_calibration method to initiate their pose attribute.
         Args:
             filename: list of two strings containing the filename of the calibration files.
+            force(bool): If True, will always prioritise calibration in file. Otherwise, prioritise pre-existing
+                        calibration
         """
 
         if filename is not None:
@@ -984,15 +990,22 @@ class DualRecording(DualStream):
         self._pose = (pose1, pose2)
         return self._pose
 
-    def get_frames(self, encoding='o3d'):
+    def get_frames(self, encoding='o3d', filtering=True):
         """
-            Fetch new frame and ensure temporal alignment.
+        Fetch new frame and ensure temporal alignment.
+
+        Args:
+            encoding(List[char]): a flag that determines the type of the returned frame.
+            filtering(bool): Filters are turned on if set to True
+
         Returns:
-            frame:Tuple containing two sets of (depth,colour) frames, 1 for each stream.
+            frame(Tuple): A tuple with a frame from each of the camera. The type of the returned frames depend on the
+                          input value for encoding.
+
         """
         # Getting new frames with a call  to the cameras.
-        f1 = self._stream1.get_frames(encoding=encoding)
-        f2 = self._stream2.get_frames(encoding=encoding)
+        f1 = self._stream1.get_frames(encoding=encoding, filtering=filtering)
+        f2 = self._stream2.get_frames(encoding=encoding, filtering=filtering)
 
         # Get the delay between the depth frames of each camera
         diff = self.stream2.timestamp - self.stream1.timestamp
@@ -1001,12 +1014,12 @@ class DualRecording(DualStream):
         while np.abs(diff) > 100:
             if diff > 100:
                 print("Timestamps:" + str(self.stream1.timestamp) + " " + str(self.stream2.timestamp))
-                f1 = self._stream1.get_frames(encoding=encoding)
+                f1 = self._stream1.get_frames(encoding=encoding, filtering=filtering)
                 diff = self.stream2.timestamp - self.stream1.timestamp
                 continue
             elif diff < -100:
                 print("Timestamps:" + str(self.stream1.timestamp) + " " + str(self.stream2.timestamp))
-                f2 = self._stream2.get_frames(encoding=encoding)
+                f2 = self._stream2.get_frames(encoding=encoding, filtering=filtering)
                 diff = self.stream2.timestamp - self.stream1.timestamp
                 continue
 
@@ -1134,7 +1147,7 @@ class DualCamera(DualStream):
         Args:
             pcd: New point cloud
         """
-        logger.warning("tried to manually set a new point cloud")
+        logging.warning("tried to manually set a new point cloud")
         pass
 
     @property
@@ -1154,7 +1167,7 @@ class DualCamera(DualStream):
         Args:
             timestamp: New timestamp
         """
-        logger.warning("Tried to manually change the timestamp")
+        logging.warning("Tried to manually change the timestamp")
         pass
 
     def compute_pcd(self, new_frame=False):
@@ -1222,17 +1235,24 @@ class DualCamera(DualStream):
         self._pose = (pose1, pose2)
         return self._pose
 
-    def get_frames(self, encoding='o3d'):
+    def get_frames(self, encoding='o3d', filtering=True):
         """
-            Fetch new frame and ensure temporal alignment.
+        Fetch new frame and ensure temporal alignment.
+
+        Args:
+            encoding(List[char]): a flag that determines the type of the returned frame.
+            filtering(bool): Filters are turned on if set to True
+
         Returns:
-            frame:Tuple containing two sets of (depth,colour) frames, 1 for each stream.
+            frame(Tuple): A tuple with a frame from each of the camera. The type of the returned frames depend on the
+                          input value for encoding.
+
         """
         # Getting new frames with a call  to the cameras.
-        f1 = self._stream1.get_frames(encoding=encoding)
-        f2 = self._stream2.get_frames(encoding=encoding)
+        f1 = self._stream1.get_frames(encoding=encoding, filtering=filtering)
+        f2 = self._stream2.get_frames(encoding=encoding, filtering=filtering)
 
-        # There should be no delays for Cameras, so this section may be obsolete:
+        # This section will be obsolete when inter cam sync is enabled.
 
         # # Get the delay between the depth frames of each camera
         # diff = f2[0].timestamp - f1[0].timestamp

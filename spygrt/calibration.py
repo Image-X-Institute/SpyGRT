@@ -27,13 +27,6 @@ import pyrealsense2 as rs2
 import open3d as o3d
 import numpy as np
 import logging
-# Setting up a logger that will write log messages in the 'stream.log' file.
-logger = logging.getLogger(__name__)
-fh = logging.FileHandler('stream.log', 'w', 'utf-8')
-fh.setLevel(logging.DEBUG)
-formatter = logging.Formatter('- %(module)s - %(levelname)-8s: %(message)s')
-fh.setFormatter(formatter)
-logger.addHandler(fh)
 
 # Modify this if using a calibration board other than the default one available
 DEFAULT_ROW = 5
@@ -99,50 +92,86 @@ class Calibrator:
 
         np.savetxt(filename, self.pose.cpu().numpy())
 
-    def find_corners3d(self, col=DEFAULT_COLUMN, rows=DEFAULT_ROW):
+    def find_corners3d_direct(self, col=DEFAULT_COLUMN, rows=DEFAULT_ROW):
         """
+        Use OpenCV's findChessboardCorners function to find the corners in the color frame captured by the camera.
+        The 3D position of the corners are then extrapolated from the depth images and added to the 'corners' instance
+        variable to be used by the different alignment functions
+
         Args:
             col: (int) Number of column on the calibration board.
             rows: (int) Number of rows on the calibration board.
-            draw: (bool) Whether the corners should be drawn on the color image.
 
         Returns:
             corners3d: (numpy.array) 3D coordinate of all the corners of the calibration board
-
-        Identify the 3D coordinates of the corners of a chessboard in the current frame
-
         """
+
         corners = np.asarray([])
         frame = self._stream.frame
-        if self._pose.allclose(o3d.core.Tensor(np.identity(4), dtype=o3d.core.Dtype.Float32, device=DEVICE)):
-            # Obtaining the frame data in numpy format
-            if type(frame[0]) == o3d.t.geometry.Image:
-                color = frame[1].as_tensor().cpu().numpy()
-                depth = frame[0].as_tensor().cpu().numpy()
 
-            else:
-                depth = np.asanyarray(frame[0].get_data()) * 0.001
-                color = np.asanyarray(frame[1].get_data())
+        # Obtaining the frame data in numpy format
+        if type(frame[0]) == o3d.t.geometry.Image:
+            color = frame[1].as_tensor().cpu().numpy()
+            depth = frame[0].as_tensor().cpu().numpy() * 0.001
 
-            ret, corners = cv.findChessboardCorners(color, [col, rows], corners,
-                                                    cv.CALIB_CB_FAST_CHECK)
-
-            if corners is None:
-                return None, None, False
-
-            corners3d = []
-
-            for corner in corners:
-                pixel = [int(np.rint(corner[0][1])), int(np.rint(corner[0][0]))]
-                corners3d.append(rs2.rs2_deproject_pixel_to_point(self._stream.get_rs_intrinsics(), corner[0],
-                                                                float(depth[pixel[0], pixel[1]])))
-
-            corners3d = np.asarray(corners3d)
-
-            self.corners.append(corners3d)
-            return corners3d
         else:
+            depth = np.asanyarray(frame[0].get_data()) * 0.001
+            color = np.asanyarray(frame[1].get_data())
+
+        ret, corners = cv.findChessboardCorners(color, [col, rows], corners,
+                                                cv.CALIB_CB_FAST_CHECK)
+
+        if corners is None:
+            return None, None, False
+
+        corners3d = []
+
+        for corner in corners:
+            pixel = [int(np.rint(corner[0][1])), int(np.rint(corner[0][0]))]
+            corners3d.append(rs2.rs2_deproject_pixel_to_point(self._stream.get_rs_intrinsics(), corner[0],
+                                                              float(depth[pixel[0], pixel[1]])))
+
+        corners3d = np.asarray(corners3d)
+
+        self.corners.append(corners3d)
+        return corners3d
+
+    def find_corners3d(self, col=DEFAULT_COLUMN, rows=DEFAULT_ROW):
+        """
+        Use OpenCV's findChessboardCorners function to find the corners in a color frame taken by a camera situated
+        directly above the chessboard. This color image is simulated using a raytracing algorithm. The 3D position of
+        the corners are then extrapolated from the depth images and added to the 'corners' instance variable to be used
+        by the different alignment functions
+
+        The raytracing algorithm requires an initial camera pose estimation - If that isn't available, this algorithm
+        will calculate an estimate using the output of the find_corner3d_direct method as input for the align_to_board
+        method.
+
+        WARNING: This estimate will be logged in the pose variable of this Calibrator instance.
+
+        Args:
+            col: (int) Number of column on the calibration board.
+            rows: (int) Number of rows on the calibration board.
+
+        Returns:
+            corners3d: (numpy.array) 3D coordinate of all the corners of the calibration board
+        """
+
+        corners = np.asarray([])
+        frame = self._stream.frame
+        # If there is no initial pose estimate for raytracing.
+        if self._pose.allclose(o3d.core.Tensor(np.identity(4), dtype=o3d.core.Dtype.Float32, device=DEVICE)):
+            # Get an initial pose estimate based on corners from color image from a single frame.
+            self.find_corners3d_direct(col, rows)
+            self.align_to_board(cal2=None, col=col, rows=rows)
+            # Reset the corners variable to remove the corners coordinate from the color frame from future
+            # considerations
+            self.corners = []
+        else:
+            temp = self._stream._pose
+            self._stream._pose = self.pose
             pcd = self._stream.compute_pcd()
+            self._stream._pose = temp
             ext = o3d.core.Tensor(np.identity(4), dtype=o3d.core.Dtype.Float64)
             ext[2][3] = 0.75
             ext[1][1] = -1
@@ -153,20 +182,21 @@ class Calibrator:
             ret, corners = cv.findChessboardCorners(color, [col, rows], corners,
                                                     cv.CALIB_CB_FAST_CHECK)
             if corners is None:
-                self.corners = rgbd
-
+                return None, None, False
             corners3d = []
             for corner in corners:
                 [u, v] = [int(np.rint(corner[0][1])), int(np.rint(corner[0][0]))]
-                corners3d.append(self._stream.intrinsics.inv() @ (
-                        rgbd.depth.dilate(2).as_tensor()[u, v] * o3d.core.Tensor([u, v, 1],
-                                                                                 dtype=o3d.core.Dtype.Float32,
-                                                                                 device=rgbd.device) * 0.001).
-                                 to(dtype=o3d.core.Dtype.Float64))
+                # Temporary variable to hold 3d corners value
+                # used to make the code more clear
+                corners3d.append(self._stream.intrinsics.inv() @ (rgbd.depth.dilate(2).as_tensor()[u, v] *
+                                                                  o3d.core.Tensor([u, v, 1],
+                                                                                  dtype=o3d.core.Dtype.Float32,
+                                                                                  device=rgbd.device) *
+                                                                  0.001).to(dtype=o3d.core.Dtype.Float64))
 
-                corners3d = np.asarray(corners3d)
-                self.corners.append(corners3d)
-                return corners3d
+            corners3d = np.asarray(corners3d)
+            self.corners.append(corners3d)
+            return corners3d
 
     def avg_corners(self, force=False):
         if self._mean_corners is None or force:
