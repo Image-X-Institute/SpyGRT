@@ -29,12 +29,12 @@ import open3d as o3d
 import numpy as np
 import logging
 # Setting up a logger that will write log messages in the 'stream.log' file.
-logger = logging.getLogger(__name__)
-fh = logging.FileHandler('stream.log', 'w', 'utf-8')
-fh.setLevel(logging.DEBUG)
-formatter = logging.Formatter('- %(module)s - %(levelname)-8s: %(message)s')
-fh.setFormatter(formatter)
-logger.addHandler(fh)
+#logger = logging.getLogger(__name__)
+#fh = logging.FileHandler('stream.log', 'w', 'utf-8')
+#fh.setLevel(logging.DEBUG)
+#formatter = logging.Formatter('- %(module)s - %(levelname)-8s: %(message)s')
+#fh.setFormatter(formatter)
+#logger.addHandler(fh)
 
 # Modify this if using a calibration board other than the default one available
 DEFAULT_ROW = 5
