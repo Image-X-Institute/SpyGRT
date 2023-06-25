@@ -22,6 +22,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+import os
 import logging
 import pyrealsense2 as rs2
 import open3d as o3d
@@ -39,7 +40,9 @@ from abc import ABC, abstractmethod
 # logger.addHandler(fh)
 
 DEVICE = None
-if hasattr(o3d, 'cuda'):
+ALLOW_GPU = os.environ.get('_RTM_GUI_ALLOWGPU')
+
+if hasattr(o3d, 'cuda') and ALLOW_GPU=="1":
     DEVICE = o3d.core.Device('cuda:0')
 else:
     DEVICE = o3d.core.Device('cpu:0')
@@ -429,7 +432,7 @@ class Camera(Stream):
 class Recording(Stream):
     """Class to handle the interaction with the Realsense API for realsense bag files."""
 
-    def __init__(self, device, filename=None):
+    def __init__(self, device, filename=None, repeat=False):
         """
         Args:
             device: link to a bag file containing a recording.
@@ -459,7 +462,7 @@ class Recording(Stream):
         self._cfg = rs2.config()
 
         # Configure the camera with the default setting.
-        self._cfg.enable_device_from_file(device, True)
+        self._cfg.enable_device_from_file(device, repeat)
 
         ctx = rs2.context()
 

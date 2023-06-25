@@ -22,6 +22,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+import os
 import cv2 as cv
 import pyrealsense2 as rs2
 import open3d as o3d
@@ -41,7 +42,10 @@ DEFAULT_COLUMN = 8
 DEFAULT_SQUARE_SIZE = 0.043
 
 DEVICE = None
-if hasattr(o3d, 'cuda'):
+
+ALLOW_GPU = os.environ.get('_RTM_GUI_ALLOWGPU')
+
+if hasattr(o3d, 'cuda') and ALLOW_GPU=="1":
     DEVICE = o3d.core.Device('cuda:0')
 else:
     DEVICE = o3d.core.Device('cpu:0')
