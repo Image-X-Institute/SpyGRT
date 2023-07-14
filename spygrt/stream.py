@@ -27,6 +27,7 @@ import pyrealsense2 as rs2
 import open3d as o3d
 import numpy as np
 import time
+import datetime
 from abc import ABC, abstractmethod
 
 
@@ -142,7 +143,16 @@ class Camera(Stream):
         self._pcd = o3d.t.geometry.PointCloud(device=DEVICE)
 
         self._threshold_filter = rs2.threshold_filter(0.1, 1.3)
+        ############################################################
+        # TESTING 123
+        self._temporal_filter = rs2.temporal_filter(1, 100, 8)
 
+        self._filters = {
+            "threshold": self._threshold_filter,
+            "temporal": self._temporal_filter
+        }
+
+        #########################################################
         # Initialise serial number early as it is needed for Stream configuration
         self.serial = device.get_info(rs2.camera_info.serial_number)
 
@@ -254,7 +264,8 @@ class Camera(Stream):
                 intrinsics (o3d.t.Tensor): 3x3 pinhole camera intrinsics matrix
         """
         return o3d.core.Tensor([[self._intrinsics.fx, 0, self._intrinsics.ppx],
-                                [0, self._intrinsics.fy, self._intrinsics.ppy], [0, 0, 1]], device=DEVICE)
+                                [0, self._intrinsics.fy, self._intrinsics.ppy], [0, 0, 1]],
+                               dtype=o3d.core.Dtype.Float32, device=DEVICE)
 
     @property
     def depth_scale(self):
@@ -338,18 +349,39 @@ class Camera(Stream):
 
         return self._pose
 
+    ############################################################
+    # TESTING 123
+    def _rs_filter(self, rs_depth, filters):
+        """
+
+        Args:
+            rs_depth(rs2.depth_frame): Realsense depth frame to be filtered.
+            filters(list(str)): List of filters to be applied.
+
+        Returns:
+            f_depth(rs2.depth_frame): Filtered Realsense frame
+
+        """
+        if filters is None:
+            logging.warning("Tried to call a filter without specifying a filter")
+            return
+        f_depth = rs_depth
+        for f in filters:
+            f_depth = self._filters[f].process(f_depth)
+        return f_depth
+
     # Encoding will be deprecated later, for now used for backward compatibility
-    def get_frames(self, encoding='o3d', filtering=True):
+    def get_frames(self, encoding='o3d', filtering=True, filters=["threshold"]):
         """
         Fetch an aligned depth and color frame.
         Args:
             encoding(List[char]): a flag that determines the type of the returned frame.
             filtering(bool): Filters are turned on if set to True
+            filters(list(str)): Name of the filter to be applied.
         Returns:
             frame: a tuple with a depth and colour frame ordered (depth, colour). The type of the returned
         frames depend on the input value for encoding.
         """
-        """"""
         if not self.warmed:
             self.warmup()
         frames = self._pipe.wait_for_frames()
@@ -358,7 +390,8 @@ class Camera(Stream):
 
         rs_depth = aligned_frames.get_depth_frame()
         rs_color = aligned_frames.get_color_frame()
-        rs_depth = self._threshold_filter.process(rs_depth)
+        if filtering:
+            rs_depth = self._rs_filter(rs_depth, filters)
         self._timestamp = rs_depth.timestamp
         if encoding == 'o3d':
             np_depth = np.asanyarray(rs_depth.get_data())
@@ -450,6 +483,16 @@ class Recording(Stream):
         # Realsense spatial filter that lower noise and preserve edges.
         self._spatial_filter = rs2.spatial_filter()
 
+        ############################################################
+        # TESTING 123
+        self._temporal_filter = rs2.temporal_filter(1, 100, 8)
+
+        self._filters = {
+            "threshold": self._threshold_filter,
+            "temporal": self._temporal_filter,
+            "spatial": self._spatial_filter
+        }
+
         # A point cloud object representing the latest frame. Stored in a Open3D Tensor PointCloud format.
         self._pcd = o3d.t.geometry.PointCloud(device=DEVICE)
 
@@ -535,7 +578,8 @@ class Recording(Stream):
                 intrinsics (o3d.t.Tensor): 3x3 pinhole camera intrinsics matrix
         """
         return o3d.core.Tensor([[self._intrinsics.fx, 0, self._intrinsics.ppx],
-                                [0, self._intrinsics.fy, self._intrinsics.ppy], [0, 0, 1]], device=DEVICE)
+                                [0, self._intrinsics.fy, self._intrinsics.ppy], [0, 0, 1]],
+                               dtype=o3d.core.Dtype.Float32, device=DEVICE)
 
     @property
     def depth_scale(self):
@@ -625,12 +669,39 @@ class Recording(Stream):
 
         return self._pose
 
-    def get_frames(self, encoding='o3d', filtering=True):
+############################################################
+# TESTING 123
+    def _rs_filter(self, rs_depth, filters):
         """
-        Fetch a new set of depth and colour frame.
+        Applies all the filter listed in the filters input argument. This function only works for realsense filters and
+        the filter values are as defined in the class init method. Future development will allow for filter value to
+        be added to a .json setting file.
+
+        Args:
+            rs_depth(rs2.depth_frame): Realsense depth frame to be filtered.
+            filters(list(str)): List of filters to be applied.
+
+        Returns:
+            f_depth(rs2.depth_frame): Filtered Realsense frame
+
+        """
+        if filters is None:
+            logging.warning("Tried to call a filter without specifying a filter")
+            return
+        f_depth = rs_depth
+        for f in filters:
+            f_depth = self._filters[f].process(f_depth)
+        return f_depth
+
+        # Encoding will be deprecated later, for now used for backward compatibility
+
+    def get_frames(self, encoding='o3d', filtering=True, filters=['threshold']):
+        """
+        Fetch an aligned depth and color frame.
         Args:
             encoding(List[char]): a flag that determines the type of the returned frame.
             filtering(bool): Filters are turned on if set to True
+            filters(list(str)): Name of the filter to be applied.
         Returns:
             frame: a tuple with a depth and colour frame ordered (depth, colour). The type of the returned
         frames depend on the input value for encoding.
@@ -653,7 +724,8 @@ class Recording(Stream):
         aligned_frames = self._align_to_color.process(frames)
 
         rs_depth = aligned_frames.get_depth_frame()
-        rs_depth = self._threshold_filter.process(rs_depth)
+        if filtering:
+            rs_depth = self._rs_filter(rs_depth, filters)
         rs_color = aligned_frames.get_color_frame()
         self._timestamp = rs_depth.timestamp
         if encoding == 'o3d':
@@ -692,7 +764,7 @@ class Recording(Stream):
         while self._playback.current_status() != rs2.playback_status.stopped:
             time.sleep(0.01)
 
-    def start_stream(self):
+    def start_stream(self, offset=1):
         """Starts or restarts the stream."""
         # Specify that this device is from a captured stream
         self._pipe = rs2.pipeline()
@@ -702,6 +774,14 @@ class Recording(Stream):
 
         # Enable frame by frame access
         self._playback.set_real_time(False)
+        temp = self._pipe.try_wait_for_frames(50)
+
+        if not temp[0]:
+            i = 1
+            self._playback.seek(datetime.timedelta(seconds=i))
+            if not self._pipe.try_wait_for_frames(50)[0]:
+                # Should log this.
+                self.start_stream(offset=offset + 0.5)
         while self._playback.current_status() != rs2.playback_status.playing:
             time.sleep(0.01)
 
@@ -990,13 +1070,14 @@ class DualRecording(DualStream):
         self._pose = (pose1, pose2)
         return self._pose
 
-    def get_frames(self, encoding='o3d', filtering=True):
+    def get_frames(self, encoding='o3d', filtering=True, filters=["threshold"]):
         """
         Fetch new frame and ensure temporal alignment.
 
         Args:
             encoding(List[char]): a flag that determines the type of the returned frame.
             filtering(bool): Filters are turned on if set to True
+            filters(List[str]): List of filters to be applied to the newly fetched frames
 
         Returns:
             frame(Tuple): A tuple with a frame from each of the camera. The type of the returned frames depend on the
@@ -1004,8 +1085,8 @@ class DualRecording(DualStream):
 
         """
         # Getting new frames with a call  to the cameras.
-        f1 = self._stream1.get_frames(encoding=encoding, filtering=filtering)
-        f2 = self._stream2.get_frames(encoding=encoding, filtering=filtering)
+        f1 = self._stream1.get_frames(encoding=encoding, filtering=filtering, filters=filters)
+        f2 = self._stream2.get_frames(encoding=encoding, filtering=filtering, filters=filters)
 
         # Get the delay between the depth frames of each camera
         diff = self.stream2.timestamp - self.stream1.timestamp
@@ -1198,11 +1279,13 @@ class DualCamera(DualStream):
         self._pcd = pcd1 + pcd2
         return self._pcd
 
-    def load_calibration(self, filename=None):
+    def load_calibration(self, filename=None, force=False):
         """
         Uses each stream's load_calibration method to initiate their pose attribute.
         Args:
             filename: list of two strings containing the filename of the calibration files.
+            force(bool): If True, will always prioritise calibration in file. Otherwise, prioritise pre-existing
+                        calibration
         """
 
         if filename is not None:
@@ -1219,29 +1302,38 @@ class DualCamera(DualStream):
                     logging.error("Could not complete calibration with default filename for DualStream object")
                     raise DualStreamError("Tried to complete default calibration but could not find calibration files")
         else:
-            try:
-                if self.stream1.pose is not None:
-                    pose1 = self.stream1.pose
-                else:
+            if force is False:
+                try:
+                    if self.stream1.pose is not None:
+                        pose1 = self.stream1.pose
+                    else:
+                        pose1 = self.stream1.load_calibration()
+                    if self.stream2.pose is not None:
+                        pose2 = self.stream2.pose
+                    else:
+                        pose2 = self.stream2.load_calibration()
+                except OSError:
+                    logging.error("Could not complete calibration with default filename for DualStream object")
+                    raise DualStreamError("Tried to complete default calibration but could not find calibration files")
+            else:
+                try:
                     pose1 = self.stream1.load_calibration()
-                if self.stream2.pose is not None:
-                    pose2 = self.stream2.pose
-                else:
                     pose2 = self.stream2.load_calibration()
-            except OSError:
-                logging.error("Could not complete calibration with default filename for DualStream object")
-                raise DualStreamError("Tried to complete default calibration but could not find calibration files")
+                except OSError:
+                    logging.error("Could not complete calibration with default filename for DualStream object")
+                    raise DualStreamError("Tried to complete default calibration but could not find calibration files")
 
         self._pose = (pose1, pose2)
         return self._pose
 
-    def get_frames(self, encoding='o3d', filtering=True):
+    def get_frames(self, encoding='o3d', filtering=True, filters=["threshold"]):
         """
         Fetch new frame and ensure temporal alignment.
 
         Args:
             encoding(List[char]): a flag that determines the type of the returned frame.
             filtering(bool): Filters are turned on if set to True
+            filters(List[str]): List of filters to be applied to the newly fetched frames
 
         Returns:
             frame(Tuple): A tuple with a frame from each of the camera. The type of the returned frames depend on the
@@ -1249,8 +1341,8 @@ class DualCamera(DualStream):
 
         """
         # Getting new frames with a call  to the cameras.
-        f1 = self._stream1.get_frames(encoding=encoding, filtering=filtering)
-        f2 = self._stream2.get_frames(encoding=encoding, filtering=filtering)
+        f1 = self._stream1.get_frames(encoding=encoding, filtering=filtering, filters=filters)
+        f2 = self._stream2.get_frames(encoding=encoding, filtering=filtering, filters=filters)
 
         # This section will be obsolete when inter cam sync is enabled.
 

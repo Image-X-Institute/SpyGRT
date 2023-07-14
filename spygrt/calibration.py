@@ -158,7 +158,6 @@ class Calibrator:
         """
 
         corners = np.asarray([])
-        frame = self._stream.frame
         # If there is no initial pose estimate for raytracing.
         if self._pose.allclose(o3d.core.Tensor(np.identity(4), dtype=o3d.core.Dtype.Float32, device=DEVICE)):
             # Get an initial pose estimate based on corners from color image from a single frame.
@@ -167,36 +166,58 @@ class Calibrator:
             # Reset the corners variable to remove the corners coordinate from the color frame from future
             # considerations
             self.corners = []
+            self._mean_corners = None
         else:
-            temp = self._stream._pose
-            self._stream._pose = self.pose
-            pcd = self._stream.compute_pcd()
-            self._stream._pose = temp
+            # Compute pcd based on initial guess (see above if statement)
+            pcd = self._stream.compute_pcd().transform(self.pose)
+            # Position of the viewpoint directly above the board
             ext = o3d.core.Tensor(np.identity(4), dtype=o3d.core.Dtype.Float64)
-            ext[2][3] = 0.75
-            ext[1][1] = -1
+            ext[2][3] = 0.75 # 75 cm above the board
+            # Create RGB-D image from directly above the board.
             rgbd = pcd.project_to_rgbd_image(1280, 720, self._stream.intrinsics, ext)
+            # Interpolation to cover the holes from the change in perspective.
             color = (rgbd.color.dilate(4).as_tensor().cpu().numpy() * 255).astype(np.uint8)
-            depth = rgbd.depth.dilate(2).as_tensor().cpu().numpy()
+            depth = rgbd.depth.dilate(4).as_tensor().cpu().numpy()
 
             ret, corners = cv.findChessboardCorners(color, [col, rows], corners,
                                                     cv.CALIB_CB_FAST_CHECK)
             if corners is None:
-                return None, None, False
+                # Reverse the y direction as the interpolation works best when the sparse region is in a certain
+                # corner of the image - Not sure why.
+                self._pose[1] = self._pose[1]*-1
+
+                # Repeat of above section.
+                pcd = self._stream.compute_pcd().transform(self.pose)
+                rgbd = pcd.project_to_rgbd_image(1280, 720, self._stream.intrinsics, ext)
+                color = (rgbd.color.dilate(4).as_tensor().cpu().numpy() * 255).astype(np.uint8)
+                depth = rgbd.depth.dilate(4).as_tensor().cpu().numpy()
+
+                ret, corners = cv.findChessboardCorners(color, [col, rows], corners,
+                                                        cv.CALIB_CB_FAST_CHECK)
+
+                # Specific error flag if board cannot be found.
+                if corners is None:
+                    return None, None, False
+
             corners3d = []
             for corner in corners:
                 [u, v] = [int(np.rint(corner[0][1])), int(np.rint(corner[0][0]))]
+
                 # Temporary variable to hold 3d corners value
-                # used to make the code more clear
-                corners3d.append(self._stream.intrinsics.inv() @ (rgbd.depth.dilate(2).as_tensor()[u, v] *
-                                                                  o3d.core.Tensor([u, v, 1],
-                                                                                  dtype=o3d.core.Dtype.Float32,
-                                                                                  device=rgbd.device) *
-                                                                  0.001).to(dtype=o3d.core.Dtype.Float64))
+                temp = self._stream.intrinsics.inv() @ (float(depth[u, v, 0] * 0.001) *
+                                                        o3d.core.Tensor([u, v, 1], dtype=o3d.core.Dtype.Float32,
+                                                                        device=DEVICE))
+
+                one = o3d.core.Tensor(1, dtype=o3d.core.Dtype.Float32, device=DEVICE)
+                temp = temp.append(one)
+                temp[2] -= 0.75
+                temp = temp[0:3]
+                corners3d.append(temp.cpu().numpy())
 
             corners3d = np.asarray(corners3d)
             self.corners.append(corners3d)
             return corners3d
+
 
     def avg_corners(self, force=False):
         if self._mean_corners is None or force:
@@ -298,8 +319,6 @@ class Calibrator:
 
 
 # Helper functions
-
-
 def to_affine(r, t):
     """Transforms a 3x3 rotation matrix and a Translation vector to an Affine transformation matrix."""
     return np.vstack((np.vstack((r.T, t)).T, [0, 0, 0, 1]))
