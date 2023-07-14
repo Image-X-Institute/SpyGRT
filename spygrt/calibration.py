@@ -56,6 +56,7 @@ class Calibrator:
         # Intrinsic matrix of the camera
         # Pose of the camera - modified by the different calibration methods.
         self._pose = o3d.core.Tensor(np.identity(4), dtype=o3d.core.Dtype.Float32, device=DEVICE)
+        self._epose = None
         self.corners = []
         self._mean_corners = None
 
@@ -159,47 +160,39 @@ class Calibrator:
 
         corners = np.asarray([])
         # If there is no initial pose estimate for raytracing.
-        if self._pose.allclose(o3d.core.Tensor(np.identity(4), dtype=o3d.core.Dtype.Float32, device=DEVICE)):
+        if self._epose is None:
             # Get an initial pose estimate based on corners from color image from a single frame.
             self.find_corners3d_direct(col, rows)
+            temp = self._pose
             self.align_to_board(cal2=None, col=col, rows=rows)
+            self._epose = self._pose
+            self._pose = temp
             # Reset the corners variable to remove the corners coordinate from the color frame from future
             # considerations
             self.corners = []
             self._mean_corners = None
         else:
             # Compute pcd based on initial guess (see above if statement)
-            pcd = self._stream.compute_pcd().transform(self.pose)
+            pcd = self._stream.compute_pcd().transform(self._epose)
             # Position of the viewpoint directly above the board
             ext = o3d.core.Tensor(np.identity(4), dtype=o3d.core.Dtype.Float64)
             ext[2][3] = 0.75 # 75 cm above the board
             # Create RGB-D image from directly above the board.
             rgbd = pcd.project_to_rgbd_image(1280, 720, self._stream.intrinsics, ext)
             # Interpolation to cover the holes from the change in perspective.
-            color = (rgbd.color.dilate(4).as_tensor().cpu().numpy() * 255).astype(np.uint8)
+            color = (rgbd.color.dilate(1).as_tensor().cpu().numpy() * 255).astype(np.uint8)
+            color = fill(color)
             depth = rgbd.depth.dilate(4).as_tensor().cpu().numpy()
 
             ret, corners = cv.findChessboardCorners(color, [col, rows], corners,
                                                     cv.CALIB_CB_FAST_CHECK)
+
+            # Specific error flag if board cannot be found.
             if corners is None:
-                # Reverse the y direction as the interpolation works best when the sparse region is in a certain
-                # corner of the image - Not sure why.
-                self._pose[1] = self._pose[1]*-1
-
-                # Repeat of above section.
-                pcd = self._stream.compute_pcd().transform(self.pose)
-                rgbd = pcd.project_to_rgbd_image(1280, 720, self._stream.intrinsics, ext)
-                color = (rgbd.color.dilate(4).as_tensor().cpu().numpy() * 255).astype(np.uint8)
-                depth = rgbd.depth.dilate(4).as_tensor().cpu().numpy()
-
-                ret, corners = cv.findChessboardCorners(color, [col, rows], corners,
-                                                        cv.CALIB_CB_FAST_CHECK)
-
-                # Specific error flag if board cannot be found.
-                if corners is None:
-                    return None, None, False
+                return None, None, False
 
             corners3d = []
+            inv_epose = self._epose.inv()
             for corner in corners:
                 [u, v] = [int(np.rint(corner[0][1])), int(np.rint(corner[0][0]))]
 
@@ -211,6 +204,7 @@ class Calibrator:
                 one = o3d.core.Tensor(1, dtype=o3d.core.Dtype.Float32, device=DEVICE)
                 temp = temp.append(one)
                 temp[2] -= 0.75
+                temp = inv_epose @ temp
                 temp = temp[0:3]
                 corners3d.append(temp.cpu().numpy())
 
@@ -218,10 +212,10 @@ class Calibrator:
             self.corners.append(corners3d)
             return corners3d
 
-
     def avg_corners(self, force=False):
         if self._mean_corners is None or force:
             self._mean_corners = np.mean(self.corners, axis=0)
+            self._mean_corners = self._mean_corners.reshape(self._mean_corners.shape[0:2])
 
         return self._mean_corners
 
@@ -255,15 +249,16 @@ class Calibrator:
         self._pose = o3d.core.Tensor(s_mat, dtype=o3d.core.Dtype.Float32, device=DEVICE) @ self.pose
         for i, corner in enumerate(corners):
             temp = np.append(corner, [1])
-            self._mean_corners[i] = (self.pose.cpu().numpy() @ temp)[0:3]
+            self._mean_corners[i] = (s_mat @ temp)[0:3].reshape([3, 1])
+
 
     def align_cameras(self, target):
         """ Find the transform between the two cameras based on the corners of the chessboard.
         If the stream has ended, update the point cloud with the last frame.
         """
 
-        s_corners = self.avg_corners()
-        t_corners = target.avg_corners()
+        s_corners = self.avg_corners().reshape([40, 3])
+        t_corners = target.avg_corners().reshape([40, 3])
         s_corners = o3d.core.Tensor(s_corners, dtype=o3d.core.Dtype.Float32, device=DEVICE)
         t_corners = o3d.core.Tensor(t_corners, dtype=o3d.core.Dtype.Float32, device=DEVICE)
         s_pcd = o3d.t.geometry.PointCloud(s_corners)
@@ -319,6 +314,53 @@ class Calibrator:
 
 
 # Helper functions
+def fill(im, ksize=9, copy=False):
+    """
+      Takes an image resulting from the projection of a point cloud (with holes) and fill the holes with an average
+      of the ksize^2 closest pixels that contain colour information.
+    Args:
+        im: (np.ndarray) image to be filled.
+        ksize: (int) size of the kernel (square kernel)
+        copy: (bool) Whether to return a copy or not.
+    Returns:
+        im: (np.ndarray) filled imaged. It is a copy if the copy parameter is true, otherwise it is a modified image
+            from  the input image.
+    """
+    # Threshold for mask
+    low = np.asarray([1, 1, 1])
+    high = np.asarray([256, 256, 256])
+
+    # copy if we want to return a copy and therefor avoid modifying the input image.
+    if copy:
+        im = im.copy()
+
+    # Create a mask of all the coloured pixels
+    mask = cv.inRange(im, low, high)
+    # Change mask value from 255 to 1
+    mask[mask == 255] = 1
+
+    # Kernel that will add all the pixel overlapped with the kernel
+    sum_ker = np.ones([ksize, ksize])
+
+    # Apply sum_ker to mask, which gives an image where every pixel contains the number of coloured pixel in their
+    # neighbourhood (square neighbourhood of size = ksize)
+    non_zero_count = cv.filter2D(mask, -1, sum_ker)
+
+    # Broadcast non_zero_count to make it a 3D array (same 2D array repeated 3 times)
+    count3d = np.broadcast_to(non_zero_count.reshape(non_zero_count.shape + (1,)), non_zero_count.shape + (3,))
+
+    # Apply sum_ker to the image to obtain an image where the colour of all the pixels in the neighbourhood are added.
+    # Converted to float to not truncate RGB values higher than 255.
+    sum_im = cv.filter2D(im.astype(np.float32), -1, sum_ker)
+
+    # The condition in brackets below is equivalent to (mask == 0 and non_zero_count !=0). It represents the position
+    # of all the black pixels in the original image that have at least one coloured pixel in their neighbourhood.
+    # Replace all the pixel that fit the above condition by the average of the coloured pixels in their neighbourhood.
+    im[(mask == 0) * (non_zero_count > 0.01)] = (sum_im[(mask == 0) * (non_zero_count > 0.01)] /
+                                                 count3d[(mask == 0) * (non_zero_count > 0.01)]).astype(np.uint8)
+
+    return im
+
 def to_affine(r, t):
     """Transforms a 3x3 rotation matrix and a Translation vector to an Affine transformation matrix."""
     return np.vstack((np.vstack((r.T, t)).T, [0, 0, 0, 1]))
