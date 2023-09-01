@@ -814,8 +814,7 @@ class Recording(Stream):
         temp = self._pipe.try_wait_for_frames(50)
 
         if not temp[0]:
-            i = 1
-            self._playback.seek(datetime.timedelta(seconds=i))
+            self._playback.seek(datetime.timedelta(seconds=offset))
             if not self._pipe.try_wait_for_frames(50)[0]:
                 # Should log this.
                 self.start_stream(offset=offset + 0.5)
