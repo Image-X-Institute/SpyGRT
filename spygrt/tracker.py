@@ -113,7 +113,7 @@ class Tracker:
     @ref_surface.setter
     def ref_surface(self, ref_surface):
         self._ref_surface = ref_surface.crop(self._box)
-        self._ref_surface.estimate_normals(30, 0.001)
+        self._ref_surface.estimate_normals(30, 0.002)
 
     @property
     def roi(self):
@@ -176,7 +176,8 @@ class Tracker:
                                                                max_iteration=it))
 
             # Point further than 1cm apart are considered non-corresponding.
-            loss_function = o3d_reg.robust_kernel.RobustKernel(o3d_reg.robust_kernel.RobustKernelMethod.TukeyLoss, 0.01)
+            loss_function = o3d_reg.robust_kernel.RobustKernel(o3d_reg.robust_kernel.RobustKernelMethod.GeneralizedLoss,
+                                                               0.003)
             # ICP specific method (Point to plane + loss function)
             method = o3d_reg.TransformationEstimationPointToPlane(loss_function)
 
@@ -189,10 +190,15 @@ class Tracker:
         # Commented out as transform is not yet implemented.
         box.transform(self._t_guess)
         source = source.crop(box)
+        if source.is_empty():
+            # WARNING
+            return o3d.core.Tensor(np.identity(4), device=DEVICE)
+        source.estimate_normals(30, 0.002)
         self._source = source
 
-        result_icp = o3d_reg.multi_scale_icp(source, self._ref_surface, self._icp_config[0], self._icp_config[1],
+        result_icp = o3d_reg.multi_scale_icp(self._ref_surface, source, self._icp_config[0], self._icp_config[1],
                                              self._icp_config[2], self._t_guess, self._icp_config[3])
+
 
         if hasattr(o3d, 'cuda'):
             self._t_guess = result_icp.transformation.cuda()

@@ -119,7 +119,7 @@ class Stream(ABC):
 class Camera(Stream):
     """Class to handle the interaction with the Realsense API for real-time frame capture"""
 
-    def __init__(self, device, cal_file=None):
+    def __init__(self, device, **kwargs):
         """
         Initialise the camera settings and start the stream.
         Args:
@@ -129,12 +129,38 @@ class Camera(Stream):
         # Initialising frame attribute.
         self._frame = None
         self._timestamp = None
+        self._pose = None
         self._device = device
 
-        if cal_file is not None:
-            self.load_calibration(cal_file)
-        else:
-            self._pose = None
+        # Setting default initialisation option
+        init_options = {
+            'cal_file': None,
+            'emitter_enabled': True,
+            'laser_power': 'max',
+            'max_distance': 200,
+            'min_distance': 0,
+            'temporal_smooth_alpha': 1,
+            'temporal_smooth_delta': 100,
+            'temporal_persistency_idx': 8,
+            'threshold_max': 1.3,
+            'threshold_min': 0.1,
+            'depth_image_width': 1280,
+            'depth_image_height': 720,
+            'depth_image_format': rs2.format.z16,
+            'depth_image_fps': 30,
+            'color_image_width': 1280,
+            'color_image_height': 720,
+            'color_image_format': rs2.format.rgb8,
+            'color_image_fps': 30,
+            'inter_cam_sync_mode': 0
+        }
+        print(kwargs)
+        for name, value in kwargs.items():
+            if name in init_options:
+                init_options[name] = value
+        if init_options['cal_file'] is not None:
+            self.load_calibration(kwargs['cal_file'])
+
 
         # Realsense point cloud object useful for the compute_pcd method. For internal class use only.
         self._rs_pc = rs2.pointcloud()
@@ -142,17 +168,7 @@ class Camera(Stream):
         # A point cloud object representing the latest frame. Stored in a Open3D Tensor PointCloud format.
         self._pcd = o3d.t.geometry.PointCloud(device=DEVICE)
 
-        self._threshold_filter = rs2.threshold_filter(0.1, 1.3)
-        ############################################################
-        # TESTING 123
-        self._temporal_filter = rs2.temporal_filter(1, 100, 8)
 
-        self._filters = {
-            "threshold": self._threshold_filter,
-            "temporal": self._temporal_filter
-        }
-
-        #########################################################
         # Initialise serial number early as it is needed for Stream configuration
         self.serial = device.get_info(rs2.camera_info.serial_number)
 
@@ -180,6 +196,7 @@ class Camera(Stream):
         # Model of the camera that captured this stream.
         self.model = device.get_info(rs2.camera_info.name)
 
+
         # Depth sensor object to access the depth scale
         depth_sensor = device.first_depth_sensor()
 
@@ -190,21 +207,42 @@ class Camera(Stream):
         self._intrinsics = depth_sensor.get_stream_profiles()[0].as_video_stream_profile().intrinsics
 
         if depth_sensor.supports(rs2.option.emitter_enabled):
-            depth_sensor.set_option(rs2.option.emitter_enabled, True)
+            depth_sensor.set_option(rs2.option.emitter_enabled, init_options['emitter_enabled'])
 
         if depth_sensor.supports(rs2.option.laser_power):
-            laser = depth_sensor.get_option_range(rs2.option.laser_power)
-            depth_sensor.set_option(rs2.option.laser_power, laser.max)
+            if init_options['laser_power'] == 'max':
+                laser = depth_sensor.get_option_range(rs2.option.laser_power)
+                depth_sensor.set_option(rs2.option.laser_power, laser.max)
+            elif init_options['laser_power'] == 'min':
+                laser = depth_sensor.get_option_range(rs2.option.laser_power)
+                depth_sensor.set_option(rs2.option.laser_power, laser.min)
+            else:
+                depth_sensor.set_option(rs2.option.laser_power, init_options['laser_power'])
 
-        try:
-            depth_sensor.set_option(rs2.option.max_distance, 200)
-        except RuntimeError:
-            logging.info("no maximum distance setting for camera model: " + self.model)
+        if depth_sensor.supports(rs2.option.max_distance):
+            depth_sensor.set_option(rs2.option.max_distance, init_options['max_distance'])
 
-        try:
-            depth_sensor.set_option(rs2.option.min_distance, 0)
-        except RuntimeError:
-            logging.info("no minimum distance setting for camera model: " + self.model)
+        if depth_sensor.supports(rs2.option.min_distance):
+            depth_sensor.set_option(rs2.option.min_distance, init_options['min_distance'])
+
+        if depth_sensor.supports(rs2.option.inter_cam_sync_mode):
+            depth_sensor.set_option(rs2.option.inter_cam_sync_mode, init_options['inter_cam_sync_mode'])
+
+        self._threshold_filter = rs2.threshold_filter(init_options['threshold_min'], init_options['threshold_max'])
+
+        print(init_options)
+        ############################################################
+        # TESTING 123
+        self._temporal_filter = rs2.temporal_filter(init_options['temporal_smooth_alpha'],
+                                                    init_options['temporal_smooth_delta'],
+                                                    init_options['temporal_persistency_idx'])
+
+        self._filters = {
+            "threshold": self._threshold_filter,
+            "temporal": self._temporal_filter
+        }
+
+        #########################################################
 
     @property
     def frame(self):
@@ -452,7 +490,6 @@ class Camera(Stream):
                     logging.warning('filename of bag file is not a string, using default filename instead')
                     bag_file = self.serial + time.localtime() + '.bag'
             self._cfg.enable_record_to_file(bag_file)
-
         self._pipe.start(self._cfg)
         self.warmup()
 
@@ -714,8 +751,7 @@ class Recording(Stream):
                 # self._pipe.get_active_profile()
 
                 # If the above statement doesn't raise an exception, assume we reached the end of the file.
-                # raise NoMoreFrames("Reached the end of the stream")
-                pass
+                raise NoMoreFrames("Reached the end of the stream")
         except AttributeError:
             pass
 
@@ -731,7 +767,8 @@ class Recording(Stream):
         if encoding == 'o3d':
             np_depth = np.asanyarray(rs_depth.get_data())
             np_color = np.asanyarray(rs_color.get_data())
-            depth = o3d.t.geometry.Image(o3d.core.Tensor(np_depth.astype(np.float32), device=DEVICE)).filter_bilateral(7, 0.05, 10)
+            depth = o3d.t.geometry.Image(o3d.core.Tensor(np_depth.astype(np.float32), device=DEVICE)).\
+                filter_bilateral(7, 0.05, 10)
             color = o3d.t.geometry.Image(o3d.core.Tensor(np_color, device=DEVICE))
             self._frame = (depth, color)
         else:
@@ -1152,7 +1189,7 @@ class DualCamera(DualStream):
             self._stream1 = stream1
         else:
             try:
-                self._stream1 = Camera(stream1)
+                self._stream1 = Camera(stream1, inter_cam_sync_mode=1)
             except RuntimeError:
                 logging.error('Could not resolve the input for \'stream1\'.')
                 raise ValueError('Could not resolve the input for \'stream1\'.' )
@@ -1160,11 +1197,10 @@ class DualCamera(DualStream):
             self._stream2 = stream2
         else:
             try:
-                self._stream2 = Camera(stream2)
+                self._stream2 = Camera(stream2, inter_cam_sync_mode=2)
             except RuntimeError:
                 logging.error('Could not resolve the input for \'stream2\'.')
                 raise ValueError('Could not resolve the input for \'stream2\'.')
-
     @property
     def stream1(self):
         """

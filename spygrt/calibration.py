@@ -44,14 +44,28 @@ class Calibrator:
     """Class to contain and perform the calibration of a camera to a predetermined frame of reference or to that of a
     different camera."""
 
-    def __init__(self, stream):
+    def __init__(self, stream, gt=None):
         """
 
         Args:
             stream: Stream object for the camera to be calibrated.
+            gt: (numpy.ndarray): Array of the ideal position of each corner on the board - first corner is positive
+                Y and negative X (IEC coordinate), camera is inf to the calibration board and corner order is row major
         """
         # Stream object to query stream setting/parameters. Private as we want to control what method of the stream
         # a Calibrator object can access. Potentially code breaking if used to call get_frames().
+        if gt is None:
+            rows = DEFAULT_ROW
+            col = DEFAULT_COLUMN
+            size = DEFAULT_SQUARE_SIZE
+            self._gt = np.zeros((rows * col, 3), np.float32)
+            self._gt[:, :2] = np.mgrid[0:col, 0:rows].T.reshape(-1, 2) * size
+            self._gt[:, 1] = (self._gt[:, 1] - 2 * size) * -1
+            self._gt[:, 0] = (self._gt[:, 0] - 4 * size) * 1
+        else:
+            self._gt = gt
+            # Trick to deal with OpenCV chessboard corner detection
+            self._gt[:, 0] *= -1
         self._stream = stream
         # Intrinsic matrix of the camera
         # Pose of the camera - modified by the different calibration methods.
@@ -80,6 +94,30 @@ class Calibrator:
                pose: New pose to replace the existing pose.
         """
         logging.warning('Manually setting the \'pose\' attribute is not allowed, use an alignment method instead')
+
+    @property
+    def gt(self):
+        """
+
+        Returns:
+            gt(numpy.ndarray): a Row*Column by 3 array containing the real position of each corner in row major.
+        """
+        temp = self._gt
+        temp[:, 0] *= -1
+        return temp
+
+    @gt.setter
+    def gt(self, gt):
+        """
+
+        Args:
+            gt: a Row*Column by 3 array containing the real position of each corner in row major.
+
+        """
+
+        self._gt = gt
+        # Trick to deal with OpenCV chessboard corner detection
+        self._gt[:, 0] *= -1
 
     def write_cal(self, filename=None):
         """
@@ -113,14 +151,13 @@ class Calibrator:
         # Obtaining the frame data in numpy format
         if type(frame[0]) == o3d.t.geometry.Image:
             color = frame[1].as_tensor().cpu().numpy()
-            depth = frame[0].as_tensor().cpu().numpy() * 0.001
+            depth = frame[0].as_tensor().cpu().numpy()
 
         else:
-            depth = np.asanyarray(frame[0].get_data()) * 0.001
+            depth = np.asanyarray(frame[0].get_data())
             color = np.asanyarray(frame[1].get_data())
 
-        ret, corners = cv.findChessboardCorners(color, [col, rows], corners,
-                                                cv.CALIB_CB_FAST_CHECK)
+        ret, corners = cv.findChessboardCornersSB(color, [col, rows], corners)
 
         if corners is None:
             return None, None, False
@@ -128,16 +165,19 @@ class Calibrator:
         corners3d = []
 
         for corner in corners:
-            pixel = [int(np.rint(corner[0][1])), int(np.rint(corner[0][0]))]
-            corners3d.append(rs2.rs2_deproject_pixel_to_point(self._stream.get_rs_intrinsics(), corner[0],
-                                                              float(depth[pixel[0], pixel[1]])))
+            [c, r] = [int(np.rint(corner[0][1])), int(np.rint(corner[0][0]))]
+            temp = self._stream.intrinsics.inv() @ (float(depth[c, r, 0] * 0.001) *
+                                                    o3d.core.Tensor([corner[0, 0], corner[0, 1], 1],
+                                                                    dtype=o3d.core.Dtype.Float32,
+                                                                    device=DEVICE))
+            corners3d.append(temp.cpu().numpy())
 
         corners3d = np.asarray(corners3d)
 
         self.corners.append(corners3d)
         return corners3d
 
-    def find_corners3d(self, col=DEFAULT_COLUMN, rows=DEFAULT_ROW):
+    def find_corners3d(self, col=DEFAULT_COLUMN, rows=DEFAULT_ROW, size=DEFAULT_SQUARE_SIZE):
         """
         Use OpenCV's findChessboardCorners function to find the corners in a color frame taken by a camera situated
         directly above the chessboard. This color image is simulated using a raytracing algorithm. The 3D position of
@@ -153,18 +193,25 @@ class Calibrator:
         Args:
             col: (int) Number of column on the calibration board.
             rows: (int) Number of rows on the calibration board.
+            size: (float) Size (in metres) of the length of one square on the calibration board.
 
         Returns:
             corners3d: (numpy.array) 3D coordinate of all the corners of the calibration board
         """
-
+        # ISSUE WHERE OPENCV IS INCONSISTENT IN CHOOSING THE FIRST CORNER OF CALIBRATION BOARD. WILL ALWAYS ASSUME
+        # WHITE LEFT AND RIGHT CORNERS ARE AT THE TOP THAN GO FROM LEFT TO RIGHT FROM THE PERSPECTIVE OF SOMEONE
+        # LOCATED INF OF THE BOARD
         corners = np.asarray([])
         # If there is no initial pose estimate for raytracing.
         if self._epose is None:
             # Get an initial pose estimate based on corners from color image from a single frame.
             self.find_corners3d_direct(col, rows)
             temp = self._pose
-            self.align_to_board(cal2=None, col=col, rows=rows)
+            # Specifically calling self.gt over self._gt to get the x axis to switch the first time.
+            self._gt = self.gt
+            self.align_to_board_alt(cal2=None, col=col, rows=rows, size=size)
+            # Specifically calling self.gt over self._gt to reset the x axi.
+            self._gt = self.gt
             self._epose = self._pose
             self._pose = temp
             # Reset the corners variable to remove the corners coordinate from the color frame from future
@@ -184,8 +231,7 @@ class Calibrator:
             color = fill(color)
             depth = rgbd.depth.dilate(4).as_tensor().cpu().numpy()
 
-            ret, corners = cv.findChessboardCorners(color, [col, rows], corners,
-                                                    cv.CALIB_CB_FAST_CHECK)
+            ret, corners = cv.findChessboardCornersSB(color, [col, rows], corners)
 
             # Specific error flag if board cannot be found.
             if corners is None:
@@ -194,11 +240,12 @@ class Calibrator:
             corners3d = []
             inv_epose = self._epose.inv()
             for corner in corners:
-                [u, v] = [int(np.rint(corner[0][1])), int(np.rint(corner[0][0]))]
+                [c, r] = [int(np.rint(corner[0][1])), int(np.rint(corner[0][0]))]
 
                 # Temporary variable to hold 3d corners value
-                temp = self._stream.intrinsics.inv() @ (float(depth[u, v, 0] * 0.001) *
-                                                        o3d.core.Tensor([u, v, 1], dtype=o3d.core.Dtype.Float32,
+                temp = self._stream.intrinsics.inv() @ (float(depth[c, r, 0] * 0.001) *
+                                                        o3d.core.Tensor([corner[0, 0], corner[0, 1], 1],
+                                                                        dtype=o3d.core.Dtype.Float32,
                                                                         device=DEVICE))
 
                 one = o3d.core.Tensor(1, dtype=o3d.core.Dtype.Float32, device=DEVICE)
@@ -249,7 +296,8 @@ class Calibrator:
         self._pose = o3d.core.Tensor(s_mat, dtype=o3d.core.Dtype.Float32, device=DEVICE) @ self.pose
         for i, corner in enumerate(corners):
             temp = np.append(corner, [1])
-            self._mean_corners[i] = (s_mat @ temp)[0:3].reshape([3, 1])
+            self._mean_corners[i] = (s_mat @ temp)[0:3]
+        self._mean_corners.reshape([DEFAULT_ROW*DEFAULT_COLUMN, 3])
 
 
     def align_cameras(self, target):
@@ -302,8 +350,9 @@ class Calibrator:
 
         rot_mat = np.array([x_axis, y_axis, z_axis]).T
 
-        # Set the origin to the mean of all corners - Transform to meters.
+        # Set the origin to the mean of all corners - Transform to metres.
         origin = np.mean(corners3d, axis=0)
+
 
         # Transform rotation and translation matrix to an affine Transformation matrix.
         pose = o3d.core.Tensor(np.linalg.inv(to_affine(rot_mat, origin)), dtype=o3d.core.Dtype.Float32, device=DEVICE)
@@ -312,6 +361,29 @@ class Calibrator:
         if cal2 is not None:
             cal2._pose = pose @ cal2.pose
 
+    def align_to_board_alt(self, cal2=None, col=DEFAULT_COLUMN, rows=DEFAULT_ROW, size=DEFAULT_SQUARE_SIZE):
+        """Find the transform that aligns the sensor's frame of reference to a frame of reference that is defined by a chessboard
+            The X axis is aligned with the rows of the chessboard
+            The Y axis is aligned with the columns of the chessboard
+            The Z axis is perpendicular to the chessboard
+        """
+
+        #NEED TO ADJUST OBJP CREATION FOR CUSTOM 0 CORNER DEFINITION
+        corners3d = self.avg_corners().reshape([rows*col, 3])
+
+
+
+        t_pcd = o3d.t.geometry.PointCloud(o3d.core.Tensor(self._gt, dtype=o3d.core.Dtype.Float32, device=DEVICE))
+        s_pcd = o3d.t.geometry.PointCloud(o3d.core.Tensor(corners3d, dtype=o3d.core.Dtype.Float32, device=DEVICE))
+        corr = np.zeros((len(self._gt), 1), dtype=np.int64)
+        corr[:, 0] = np.arange(0, len(self._gt))
+        icp = o3d.t.pipelines.registration.TransformationEstimationPointToPoint()
+
+        pose = icp.compute_transformation(s_pcd, t_pcd, o3d.core.Tensor(corr, device=DEVICE)). \
+            to(o3d.core.Dtype.Float32).to(device=DEVICE)
+        self._pose = pose @ self.pose
+        if cal2 is not None:
+            cal2._pose = pose @ cal2.pose
 
 # Helper functions
 def fill(im, ksize=9, copy=False):
