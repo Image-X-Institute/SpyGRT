@@ -28,6 +28,7 @@ import pyrealsense2 as rs2
 import open3d as o3d
 import numpy as np
 import time
+import datetime
 from abc import ABC, abstractmethod
 
 
@@ -698,7 +699,7 @@ class Recording(Stream):
         while self._playback.current_status() != rs2.playback_status.stopped:
             time.sleep(0.01)
 
-    def start_stream(self):
+    def start_stream(self, offset=1):
         """Starts or restarts the stream."""
         # Specify that this device is from a captured stream
         self._pipe = rs2.pipeline()
@@ -708,6 +709,14 @@ class Recording(Stream):
 
         # Enable frame by frame access
         self._playback.set_real_time(False)
+        temp = self._pipe.try_wait_for_frames(50)
+
+        if not temp[0]:
+            i = 1
+            self._playback.seek(datetime.timedelta(seconds=i))
+            if not self._pipe.try_wait_for_frames(50)[0]:
+                # Should log this.
+                self.start_stream(offset=offset + 0.5)
         while self._playback.current_status() != rs2.playback_status.playing:
             time.sleep(0.01)
 
