@@ -37,7 +37,10 @@ o3d_geo = o3d.t.geometry
 CALIBRATION_FOLDER = '../Calibrations/'
 
 DEVICE = None
-if hasattr(o3d, 'cuda'):
+
+ALLOW_GPU = os.environ.get('_RTM_GUI_ALLOWGPU')
+
+if hasattr(o3d, 'cuda') and ALLOW_GPU=="1":
     DEVICE = o3d.core.Device('cuda:0')
 else:
     DEVICE = o3d.core.Device('cpu:0')
@@ -122,8 +125,12 @@ class Tracker:
     @roi.setter
     def roi(self, roi):
         self._roi = np.asarray(roi, dtype='float32')
-        self._box.set_min_bound = o3d.core.Tensor(self._roi[0], device=DEVICE)
-        self._box.set_max_bound = o3d.core.Tensor(self.roi[1], device=DEVICE)
+
+        self._box = o3d_geo.AxisAlignedBoundingBox(o3d.core.Tensor(self._roi[0], device=DEVICE),
+                                                   o3d.core.Tensor(self._roi[1], device=DEVICE))
+
+        # self._box.set_min_bound = o3d.core.Tensor(self._roi[0], device=DEVICE)
+        # self._box.set_max_bound = o3d.core.Tensor(self.roi[1], device=DEVICE)
 
     def select_roi(self):
         """
@@ -194,7 +201,7 @@ class Tracker:
         result_icp = o3d_reg.multi_scale_icp(source, self._ref_surface, self._icp_config[0], self._icp_config[1],
                                              self._icp_config[2], self._t_guess, self._icp_config[3])
 
-        if hasattr(o3d, 'cuda'):
+        if hasattr(o3d, 'cuda') and ALLOW_GPU=="1":
             self._t_guess = result_icp.transformation.cuda()
         else:
             self._t_guess = result_icp.transformation

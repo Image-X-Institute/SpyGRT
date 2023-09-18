@@ -22,18 +22,19 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+import os
 import cv2 as cv
 import pyrealsense2 as rs2
 import open3d as o3d
 import numpy as np
 import logging
 # Setting up a logger that will write log messages in the 'stream.log' file.
-logger = logging.getLogger(__name__)
-fh = logging.FileHandler('stream.log', 'w', 'utf-8')
-fh.setLevel(logging.DEBUG)
-formatter = logging.Formatter('- %(module)s - %(levelname)-8s: %(message)s')
-fh.setFormatter(formatter)
-logger.addHandler(fh)
+#logger = logging.getLogger(__name__)
+#fh = logging.FileHandler('stream.log', 'w', 'utf-8')
+#fh.setLevel(logging.DEBUG)
+#formatter = logging.Formatter('- %(module)s - %(levelname)-8s: %(message)s')
+#fh.setFormatter(formatter)
+#logger.addHandler(fh)
 
 # Modify this if using a calibration board other than the default one available
 DEFAULT_ROW = 5
@@ -41,7 +42,10 @@ DEFAULT_COLUMN = 8
 DEFAULT_SQUARE_SIZE = 0.043
 
 DEVICE = None
-if hasattr(o3d, 'cuda'):
+
+ALLOW_GPU = os.environ.get('_RTM_GUI_ALLOWGPU')
+
+if hasattr(o3d, 'cuda') and ALLOW_GPU=="1":
     DEVICE = o3d.core.Device('cuda:0')
 else:
     DEVICE = o3d.core.Device('cpu:0')
@@ -114,6 +118,7 @@ class Calibrator:
         """
         corners = np.asarray([])
         frame = self._stream.frame
+        
         if self._pose.allclose(o3d.core.Tensor(np.identity(4), dtype=o3d.core.Dtype.Float32, device=DEVICE)):
             # Obtaining the frame data in numpy format
             if type(frame[0]) == o3d.t.geometry.Image:
@@ -126,7 +131,6 @@ class Calibrator:
 
             ret, corners = cv.findChessboardCorners(color, [col, rows], corners,
                                                     cv.CALIB_CB_FAST_CHECK)
-
             if corners is None:
                 return None, None, False
 
@@ -140,7 +144,9 @@ class Calibrator:
             corners3d = np.asarray(corners3d)
 
             self.corners.append(corners3d)
-            return corners3d
+
+            return corners3d, corners, ret
+
         else:
             pcd = self._stream.compute_pcd()
             ext = o3d.core.Tensor(np.identity(4), dtype=o3d.core.Dtype.Float64)
@@ -153,9 +159,10 @@ class Calibrator:
             ret, corners = cv.findChessboardCorners(color, [col, rows], corners,
                                                     cv.CALIB_CB_FAST_CHECK)
             if corners is None:
-                self.corners = rgbd
+                self.corners = rgbd # how does this work if the chessboard is not found?
 
             corners3d = []
+
             for corner in corners:
                 [u, v] = [int(np.rint(corner[0][1])), int(np.rint(corner[0][0]))]
                 corners3d.append(self._stream.intrinsics.inv() @ (
@@ -165,8 +172,10 @@ class Calibrator:
                                  to(dtype=o3d.core.Dtype.Float64))
 
                 corners3d = np.asarray(corners3d)
+
                 self.corners.append(corners3d)
-                return corners3d
+
+                return corners3d, corners, ret
 
     def avg_corners(self, force=False):
         if self._mean_corners is None or force:
