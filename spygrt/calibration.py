@@ -118,6 +118,7 @@ class Calibrator:
         """
         corners = np.asarray([])
         frame = self._stream.frame
+        
         if self._pose.allclose(o3d.core.Tensor(np.identity(4), dtype=o3d.core.Dtype.Float32, device=DEVICE)):
             # Obtaining the frame data in numpy format
             if type(frame[0]) == o3d.t.geometry.Image:
@@ -130,7 +131,6 @@ class Calibrator:
 
             ret, corners = cv.findChessboardCorners(color, [col, rows], corners,
                                                     cv.CALIB_CB_FAST_CHECK)
-
             if corners is None:
                 return None, None, False
 

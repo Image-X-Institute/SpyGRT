@@ -23,6 +23,7 @@
 # SOFTWARE.
 
 import os
+import threading
 import logging
 import pyrealsense2 as rs2
 import open3d as o3d
@@ -118,8 +119,25 @@ class Stream(ABC):
     def start_stream(self):
         pass
 
+class StreamBase(Stream):
+    """Base class to wrap common pipeline properties"""
+    def __init__(self, warmupFrames=50):
+        # logger
+        self.log = logging.getLogger(__name__)
 
-class Camera(Stream):
+        # number of frames to allow for warmup
+        self._warmupFrames = warmupFrames
+
+        # flag to indicate stream is active and warmed up or closed down properly
+        self._streamingFlag = threading.Event()
+
+    @property
+    def isStreaming(self):
+        return self._streamingFlag.is_set()
+
+    def waitStreaming(self, timeout=3):
+        self._streamingFlag.wait(timeout=timeout)
+class Camera(StreamBase):
     """Class to handle the interaction with the Realsense API for real-time frame capture"""
 
     def __init__(self, device, cal_file=None):
@@ -129,6 +147,9 @@ class Camera(Stream):
             device(rs2.device): Realsense device object pointing to a camera(rs2.device).
             cal_file(string): Filepath to the calibration file
         """
+        
+        super().__init__()
+
         # Initialising frame attribute.
         self._frame = None
         self._device = device
@@ -142,7 +163,7 @@ class Camera(Stream):
         self._rs_pc = rs2.pointcloud()
 
         # Realsense threshold filter object for processing frames.
-        self._threshold_filter = rs2.threshold_filter(0.1, 5)#(0.1, 1.3)
+        self._threshold_filter = None#rs2.threshold_filter(0.1, 5)#(0.1, 1.3)
 
         # A point cloud object representing the latest frame. Stored in a Open3D Tensor PointCloud format.
         self._pcd = o3d.t.geometry.PointCloud(device=DEVICE)
@@ -193,12 +214,12 @@ class Camera(Stream):
         try:
             depth_sensor.set_option(rs2.option.max_distance, 200)
         except RuntimeError:
-            logging.info("no maximum distance setting for camera model: " + self.model)
+            self.log.info("no maximum distance setting for camera model: " + self.model)
 
         try:
             depth_sensor.set_option(rs2.option.min_distance, 0)
         except RuntimeError:
-            logging.info("no minimum distance setting for camera model: " + self.model)
+            self.log.info("no minimum distance setting for camera model: " + self.model)
 
     @property
     def frame(self):
@@ -224,7 +245,7 @@ class Camera(Stream):
                 # location
                 self.load_calibration()
             except OSError as e:
-                logging.error("Could not find the default calibration file for camera with serial number: "
+                self.log.error("Could not find the default calibration file for camera with serial number: "
                               + self.serial)
                 return o3d.core.Tensor(np.identity(4), dtype=o3d.core.Dtype.Float32, device=DEVICE).cpu().numpy()
         return self._pose
@@ -340,7 +361,7 @@ class Camera(Stream):
         return self._pose
 
     # Encoding will be deprecated later, for now used for backward compatibility
-    def get_frames(self, encoding='rs'):
+    def get_frames(self, encoding='rs', timeout=5000):
         """
         Fetch an aligned depth and color frame.
         Args:
@@ -352,7 +373,7 @@ class Camera(Stream):
         """"""
         if not self.warmed:
             self.warmup()
-        frames = self._pipe.wait_for_frames()
+        frames = self._pipe.wait_for_frames(timeout_ms=timeout)
 
         aligned_frames = self.__align_to_color.process(frames)
 
@@ -379,9 +400,18 @@ class Camera(Stream):
 
     def warmup(self):
         """"Warmup the camera before frame acquisition"""
-        for i in range(30):
-            self._pipe.wait_for_frames()
+        for i in range(self._warmupFrames):
+            try:
+                self._pipe.wait_for_frames()
+
+            except Exception as e:
+                raise Exception(f"{e}. Please check camera is not connected to another application.")
+
+        self.log.info("Warmed up")
+
         self.warmed = True
+        self._streamingFlag.set()
+
         # self.intrinsics = frames.get_depth_frame().get_profile().as_video_stream_profile().intrinsics
 
     def o3d_intrinsics(self):
@@ -404,16 +434,39 @@ class Camera(Stream):
 
     def end_stream(self):
         """End the stream."""
-        self._pipe.stop()
-        self.warmed = False
 
-    def start_stream(self, rec=False, bag_file=None):
+        if not self.isStreaming:
+            # not streaming
+            return
+        
+        try:
+            self.log.info("Stopping RS2 pipeline")
+            device = self._pipe.get_active_profile().get_device()
+            self._pipe.stop()
+            self.log.info(f"Stopped: {device}")
+
+        finally:
+            # clear state vars
+            self.warmed = False
+            self._streamingFlag.clear()
+
+    def start_stream(self, rec=False, bag_file=None, warm_up=True):
         """
         Starts or restarts the stream.
         Args:
             rec: Bool to indicate whether a recording should be created
             bag_file: filepath to the desired location for the recorded file.
         """
+
+        if self.isStreaming:
+            # already running
+            self.log.warning("Aready streaming")
+            return
+
+        self.log.warning("Starting RS2 pipeline")
+
+        self._warmed = False
+
         if rec:
             if bag_file is None:
                 bag_file = self.serial + '_' + time.localtime() + '.bag'
@@ -422,22 +475,29 @@ class Camera(Stream):
                     if bag_file[-4:] != '.bag':
                         bag_file = bag_file + '.bag'
                 except TypeError:
-                    logging.warning('filename of bag file is not a string, using default filename instead')
+                    self.log.warning('filename of bag file is not a string, using default filename instead')
                     bag_file = self.serial + time.localtime() + '.bag'
             self._cfg.enable_record_to_file(bag_file)
 
         self._pipe.start(self._cfg)
-        self.warmup()
+
+        if warm_up:
+            self.warmup()
 
 
-class Recording(Stream):
+class Recording(StreamBase):
     """Class to handle the interaction with the Realsense API for realsense bag files."""
 
-    def __init__(self, device, filename=None, repeat=False):
+    def __init__(self, device, filename=None, repeat=False, ctx=None):
         """
         Args:
             device: link to a bag file containing a recording.
         """
+
+        super().__init__()
+
+        self._ctx = ctx # re-use provided context
+
         self._frame = None
 
         if filename is not None:
@@ -465,7 +525,8 @@ class Recording(Stream):
         # Configure the camera with the default setting.
         self._cfg.enable_device_from_file(device, repeat)
 
-        ctx = rs2.context()
+        # re-use given context if provided (this is necessary to avoid COM errors in RTMGUI)
+        ctx = rs2.context() if self._ctx is None else self._ctx
 
         # Realsense device object to access device metadata.
         self._device = ctx.load_device(device)
@@ -478,7 +539,7 @@ class Recording(Stream):
 
         # Serial number of the camera that captured this stream.
         self.serial = self._device.get_info(rs2.camera_info.serial_number)
-
+        
         # Model of the camera that captured this stream.
         self.model = self._device.get_info(rs2.camera_info.name)
 
@@ -516,7 +577,7 @@ class Recording(Stream):
                 # location
                 self.load_calibration()
             except OSError as e:
-                logging.error("Could not find the default calibration file for camera with serial number: "
+                self.log.error("Could not find the default calibration file for camera with serial number: "
                               + self.serial)
                 raise e
         return self._pose
@@ -631,7 +692,7 @@ class Recording(Stream):
 
         return self._pose
 
-    def get_frames(self, encoding='o3d'):
+    def get_frames(self, encoding='o3d', timeout=5000):
         """
         Fetch a new set of depth and colour frame.
         Args:
@@ -653,7 +714,7 @@ class Recording(Stream):
         except AttributeError:
             pass
 
-        frames = self._pipe.wait_for_frames()
+        frames = self._pipe.wait_for_frames(timeout_ms=timeout)
 
         aligned_frames = self._align_to_color.process(frames)
 
@@ -695,12 +756,43 @@ class Recording(Stream):
 
     def end_stream(self):
         """End the stream."""
-        self._pipe.stop()
-        while self._playback.current_status() != rs2.playback_status.stopped:
-            time.sleep(0.01)
+
+        if not self.isStreaming:
+            # not streaming
+            return
+        
+        try:
+            self.log.info("Stopping RS2 playback pipeline")
+            device = self._pipe.get_active_profile().get_device()
+            self._pipe.stop()
+
+            sleepDelay = 0.01
+            maxTries = 5.0/sleepDelay # max delay of 5 sec
+            tries = 0
+
+            while tries<maxTries:
+                time.sleep(sleepDelay)
+                tries += 1
+                
+                if self._playback.current_status() == rs2.playback_status.stopped:
+                    break
+
+            self.log.info(f"Stopped: {device}")
+
+        finally:
+            # clear state vars
+            self._streamingFlag.clear()
 
     def start_stream(self, offset=1):
         """Starts or restarts the stream."""
+
+        if self.isStreaming:
+            # already running
+            self.log.warning("Aready streaming")
+            return
+
+        self.log.warning("Starting RS2 playback pipeline")
+
         # Specify that this device is from a captured stream
         self._pipe = rs2.pipeline()
         pipe_profile = self._pipe.start(self._cfg)
@@ -709,17 +801,29 @@ class Recording(Stream):
 
         # Enable frame by frame access
         self._playback.set_real_time(False)
-        temp = self._pipe.try_wait_for_frames(50)
+        temp = self._pipe.try_wait_for_frames(self._warmupFrames)
 
         if not temp[0]:
             i = 1
-            self._playback.seek(datetime.timedelta(seconds=i))
-            if not self._pipe.try_wait_for_frames(50)[0]:
-                # Should log this.
-                self.start_stream(offset=offset + 0.5)
-        while self._playback.current_status() != rs2.playback_status.playing:
-            time.sleep(0.01)
 
+            self._playback.seek(datetime.timedelta(seconds=i))
+
+            if not self._pipe.try_wait_for_frames(50)[0]:
+                self.log.warning("Trying to restart with offset")
+                self.start_stream(offset=offset + 0.5)
+
+        sleepDelay = 0.01 
+        maxTries = 5.0/sleepDelay # max delay of 5 sec
+        tries = 0
+
+        while tries<maxTries:
+            time.sleep(sleepDelay)
+            tries += 1
+            
+            if self._playback.current_status() == rs2.playback_status.playing:
+                break
+
+        self._streamingFlag.set()
 
 class DualStream(Stream, ABC):
     """ Abstract class to handle a stream from two devices (2 cameras or 2 recordings)."""
