@@ -907,6 +907,9 @@ class DualRecording(DualStream):
             stream2: Second stream of the dual stream.
             cal_file(list:string): list of filepath to the calibration files
         """
+        # init logger here
+        self.log = logging.getLogger(__name__)
+
         # Initialising frame attribute.
         self._frame = None
 
@@ -1107,15 +1110,15 @@ class DualRecording(DualStream):
         self._pose = (pose1, pose2)
         return self._pose
 
-    def get_frames(self, encoding='o3d'):
+    def get_frames(self, encoding='o3d', timeout=5000):
         """
             Fetch new frame and ensure temporal alignment.
         Returns:
             frame:Tuple containing two sets of (depth,colour) frames, 1 for each stream.
         """
         # Getting new frames with a call  to the cameras.
-        f1 = self._stream1.get_frames(encoding=encoding)
-        f2 = self._stream2.get_frames(encoding=encoding)
+        f1 = self._stream1.get_frames(encoding=encoding, timeout=timeout)
+        f2 = self._stream2.get_frames(encoding=encoding, timeout=timeout)
 
         # Get the delay between the depth frames of each camera
         diff = self.stream2.timestamp - self.stream1.timestamp
@@ -1123,13 +1126,13 @@ class DualRecording(DualStream):
         # Both cameras are synchronised.
         while np.abs(diff) > 100:
             if diff > 100:
-                print("Timestamps:" + str(self.stream1.timestamp) + " " + str(self.stream2.timestamp))
-                f1 = self._stream1.get_frames(encoding=encoding)
+                self.log.debug("SYNC :: Timestamps:" + str(self.stream1.timestamp) + " " + str(self.stream2.timestamp))
+                f1 = self._stream1.get_frames(encoding=encoding, timeout=timeout)
                 diff = self.stream2.timestamp - self.stream1.timestamp
                 continue
             elif diff < -100:
-                print("Timestamps:" + str(self.stream1.timestamp) + " " + str(self.stream2.timestamp))
-                f2 = self._stream2.get_frames(encoding=encoding)
+                self.log.debug("SYNC :: Timestamps:" + str(self.stream1.timestamp) + " " + str(self.stream2.timestamp))
+                f2 = self._stream2.get_frames(encoding=encoding, timeout=timeout)
                 diff = self.stream2.timestamp - self.stream1.timestamp
                 continue
 
@@ -1162,6 +1165,9 @@ class DualCamera(DualStream):
             stream2(spygrt.stream.Camera): Second stream of the dual stream.
             cal_file(list:string): list of filepath to the calibration files
         """
+        # init logger here
+        self.log = logging.getLogger(__name__)
+
         # Initialising frame attribute.
         self._frame = None
 
@@ -1345,15 +1351,15 @@ class DualCamera(DualStream):
         self._pose = (pose1, pose2)
         return self._pose
 
-    def get_frames(self, encoding='o3d'):
+    def get_frames(self, encoding='o3d', timeout=5000):
         """
             Fetch new frame and ensure temporal alignment.
         Returns:
             frame:Tuple containing two sets of (depth,colour) frames, 1 for each stream.
         """
         # Getting new frames with a call  to the cameras.
-        f1 = self._stream1.get_frames(encoding=encoding)
-        f2 = self._stream2.get_frames(encoding=encoding)
+        f1 = self._stream1.get_frames(encoding=encoding, timeout=timeout)
+        f2 = self._stream2.get_frames(encoding=encoding, timeout=timeout)
 
         # There should be no delays for Cameras, so this section may be obsolete:
 
