@@ -131,7 +131,7 @@ class Calibrator:
 
         np.savetxt(filename, self.pose.cpu().numpy())
 
-    def find_corners3d_direct(self, col=DEFAULT_COLUMN, rows=DEFAULT_ROW):
+    def find_corners3d_direct(self, col=DEFAULT_COLUMN, rows=DEFAULT_ROW, algorithm='SB'):
         """
         Use OpenCV's findChessboardCorners function to find the corners in the color frame captured by the camera.
         The 3D position of the corners are then extrapolated from the depth images and added to the 'corners' instance
@@ -140,6 +140,7 @@ class Calibrator:
         Args:
             col: (int) Number of column on the calibration board.
             rows: (int) Number of rows on the calibration board.
+            algorithm([char]): Corner finding algorithm ('SB' or 'reg')
 
         Returns:
             corners3d: (numpy.array) 3D coordinate of all the corners of the calibration board
@@ -150,16 +151,21 @@ class Calibrator:
 
         # Obtaining the frame data in numpy format
         if type(frame[0]) == o3d.t.geometry.Image:
-            color = frame[1].as_tensor().cpu().numpy()
+            color = frame[1].rgb_to_gray().as_tensor().cpu().numpy()
             depth = frame[0].as_tensor().cpu().numpy()
 
         else:
             depth = np.asanyarray(frame[0].get_data())
             color = np.asanyarray(frame[1].get_data())
+        if algorithm == 'reg':
+            ret, corners = cv.findChessboardCorners(color, [col, rows], corners)
+            if ret:
+                corners = cv.cornerSubPix(color, corners, [11, 11], [-1, -1],
+                                          (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.1))
+        else:
+            ret, corners = cv.findChessboardCornersSB(color, [col, rows], corners)
 
-        ret, corners = cv.findChessboardCornersSB(color, [col, rows], corners)
-
-        if corners is None:
+        if not ret:
             return None, None, False
 
         corners3d = []
@@ -177,7 +183,7 @@ class Calibrator:
         self.corners.append(corners3d)
         return corners3d
 
-    def find_corners3d(self, col=DEFAULT_COLUMN, rows=DEFAULT_ROW, size=DEFAULT_SQUARE_SIZE):
+    def find_corners3d(self, col=DEFAULT_COLUMN, rows=DEFAULT_ROW, size=DEFAULT_SQUARE_SIZE, algorithm='SB'):
         """
         Use OpenCV's findChessboardCorners function to find the corners in a color frame taken by a camera situated
         directly above the chessboard. This color image is simulated using a raytracing algorithm. The 3D position of
@@ -194,6 +200,7 @@ class Calibrator:
             col: (int) Number of column on the calibration board.
             rows: (int) Number of rows on the calibration board.
             size: (float) Size (in metres) of the length of one square on the calibration board.
+            algorithm([char]): Corner finding algorithm ('SB' or 'reg')
 
         Returns:
             corners3d: (numpy.array) 3D coordinate of all the corners of the calibration board
@@ -205,11 +212,16 @@ class Calibrator:
         # If there is no initial pose estimate for raytracing.
         if self._epose is None:
             # Get an initial pose estimate based on corners from color image from a single frame.
-            self.find_corners3d_direct(col, rows)
+            if algorithm == 'reg':
+                self.find_corners3d_direct(col, rows, algorithm='reg')
+            else:
+                self.find_corners3d_direct(col, rows, algorithm='SB')
             temp = self._pose
             # Specifically calling self.gt over self._gt to get the x axis to switch the first time.
             self._gt = self.gt
             self.align_to_board_alt(cal2=None, col=col, rows=rows, size=size)
+            if self.corners is None:
+                return None, None, False
             # Specifically calling self.gt over self._gt to reset the x axi.
             self._gt = self.gt
             self._epose = self._pose
@@ -230,11 +242,17 @@ class Calibrator:
             color = (rgbd.color.dilate(1).as_tensor().cpu().numpy() * 255).astype(np.uint8)
             color = fill(color)
             depth = rgbd.depth.dilate(4).as_tensor().cpu().numpy()
-
-            ret, corners = cv.findChessboardCornersSB(color, [col, rows], corners)
+            if algorithm == 'reg':
+                ret, corners = cv.findChessboardCorners(color, [col, rows], corners)
+                if ret:
+                    gray = cv.cvtColor(color, cv.COLOR_RGB2GRAY)
+                    corners = cv.cornerSubPix(gray, corners, [11, 11], [-1, -1],
+                                              (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.1))
+            else:
+                ret, corners = cv.findChessboardCornersSB(color, [col, rows], corners)
 
             # Specific error flag if board cannot be found.
-            if corners is None:
+            if not ret:
                 return None, None, False
 
             corners3d = []
@@ -370,8 +388,6 @@ class Calibrator:
 
         #NEED TO ADJUST OBJP CREATION FOR CUSTOM 0 CORNER DEFINITION
         corners3d = self.avg_corners().reshape([rows*col, 3])
-
-
 
         t_pcd = o3d.t.geometry.PointCloud(o3d.core.Tensor(self._gt, dtype=o3d.core.Dtype.Float32, device=DEVICE))
         s_pcd = o3d.t.geometry.PointCloud(o3d.core.Tensor(corners3d, dtype=o3d.core.Dtype.Float32, device=DEVICE))

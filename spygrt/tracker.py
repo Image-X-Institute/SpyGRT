@@ -142,17 +142,19 @@ class Tracker:
         p2 = self._ref_surface.point["positions"][idx[1]].cpu().numpy()
 
         mid_z = np.mean([p1[2], p2[2]])
-        lower = [np.min([p1[0], p2[0]])-0.02, np.min([p1[1], p2[1]])-0.02, mid_z - 0.02]
-        upper = [np.max([p1[0], p2[0]])+0.02, np.max([p1[1], p2[1]])+0.02, mid_z + 0.1]
+        lower = [np.min([p1[0], p2[0]]) - 0.02, np.min([p1[1], p2[1]]) - 0.02, mid_z - 0.02]
+        upper = [np.max([p1[0], p2[0]]) + 0.02, np.max([p1[1], p2[1]]) + 0.02, mid_z + 0.1]
 
         self._roi = np.asarray([lower, upper], dtype='float32')
 
-    def get_motion(self, source):
+    def get_motion(self, source, robust=True):
         """
         Uses ICP to calculate the motion between the input point cloud and the reference point cloud.
 
         Args:
-            source: Point cloud to be registered.
+            source(o3d.t.geometry.PointCloud): Point cloud to be registered.
+            robust(bool): Logical value that determines whether the ICP is tried with an expended ROI when there is
+            the surface isn't found inside the ROI.
 
         Returns:
             motion: 4x4 transformation matrix representing the change in 6DoF motion
@@ -183,29 +185,37 @@ class Tracker:
 
             self._icp_config = [voxel_radius, criteria, dist, method]
 
-
-
         # Cropping the input point cloud to obtain only the ROI
         box = o3d_geo.OrientedBoundingBox.create_from_axis_aligned_bounding_box(self._box)
         # Commented out as transform is not yet implemented.
         box.transform(self._t_guess)
-        source = source.crop(box)
-        if source.is_empty():
-            # WARNING
-            return o3d.core.Tensor(np.identity(4), device=DEVICE)
-        source.estimate_normals(30, 0.002)
-        self._source = source
+        new_source = source.crop(box)
+        if new_source.is_empty() or new_source.point['positions'].shape[0] < self._ref_surface.point['positions']. \
+                shape[0] * 0.1:
+            # Warning
+            if robust:
+                box.scale(2)
+                new_source = source.crop(box)
+                if new_source.is_empty() or new_source.point['positions'].shape[0] < self. \
+                        _ref_surface.point['positions'].shape[0] * 0.1:
+                    # WARNING
+                    self._t_guess = o3d.core.Tensor(np.identity(4), device=DEVICE)
+                    return self._t_guess
+            else:
+                self._t_guess = o3d.core.Tensor(np.identity(4), device=DEVICE)
+                return self._t_guess
 
-        result_icp = o3d_reg.multi_scale_icp(self._ref_surface, source, self._icp_config[0], self._icp_config[1],
+        new_source.estimate_normals(30, 0.002)
+        self._source = new_source
+
+        result_icp = o3d_reg.multi_scale_icp(self._ref_surface, new_source, self._icp_config[0], self._icp_config[1],
                                              self._icp_config[2], self._t_guess, self._icp_config[3])
-
 
         if hasattr(o3d, 'cuda'):
             self._t_guess = result_icp.transformation.cuda()
         else:
             self._t_guess = result_icp.transformation
         return self._t_guess
-
 
     @staticmethod
     def isR_matrix(R):
@@ -240,7 +250,7 @@ class Tracker:
             ry = np.arctan2(-R[2, 0], sy) * 180 / np.pi
             rz = np.arctan2(R[1, 0], R[0, 0]) * 180 / np.pi
 
-        else: # May need to double-check axes here
+        else:  # May need to double-check axes here
             rx = np.arctan2(-R[1, 2], R[1, 1]) * 180 / np.pi
             ry = np.arctan2(-R[2, 0], sy) * 180 / np.pi
             rz = 0

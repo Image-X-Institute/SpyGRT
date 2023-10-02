@@ -154,7 +154,6 @@ class Camera(Stream):
             'color_image_fps': 30,
             'inter_cam_sync_mode': 0
         }
-        print(kwargs)
         for name, value in kwargs.items():
             if name in init_options:
                 init_options[name] = value
@@ -230,7 +229,6 @@ class Camera(Stream):
 
         self._threshold_filter = rs2.threshold_filter(init_options['threshold_min'], init_options['threshold_max'])
 
-        print(init_options)
         ############################################################
         # TESTING 123
         self._temporal_filter = rs2.temporal_filter(init_options['temporal_smooth_alpha'],
@@ -248,6 +246,7 @@ class Camera(Stream):
     def frame(self):
         """
         Access the last frame.
+
         Returns:
             frame: A tuple containing the last frame ordered (depth, colour)
         """
@@ -259,8 +258,9 @@ class Camera(Stream):
     def pose(self):
         """
         Access the 4x4 matrix representing the camera pose.
+
         Returns:
-            pose (numpy ndarray): a 4x4 matrix representing the camera to world transform
+            pose(o3d.core.Tensor): a 4x4 matrix representing the camera to world transform
         """
 
         if self._pose is None:
@@ -277,8 +277,9 @@ class Camera(Stream):
     def pcd(self):
         """
         Access the point cloud form of the current frame.
+
         Returns:
-            pcd: A tensor-based Open3D point cloud object.
+            pcd(o3d.t.geometry.PointCloud): A tensor-based Open3D point cloud object.
         """
         if self._pcd.is_empty():
             self.compute_pcd()
@@ -288,6 +289,7 @@ class Camera(Stream):
     def pcd(self, pcd):
         """
         Ensures pcd is read-only
+
         Args:
             pcd: New point cloud
         """
@@ -297,9 +299,10 @@ class Camera(Stream):
     @property
     def intrinsics(self):
         """
-            Access the camera's pinhole camera intrinsics.
-            Returns:
-                intrinsics (o3d.t.Tensor): 3x3 pinhole camera intrinsics matrix
+        Access the camera's pinhole camera intrinsics.
+
+        Returns:
+            intrinsics(o3d.t.Tensor): 3x3 pinhole camera intrinsics matrix
         """
         return o3d.core.Tensor([[self._intrinsics.fx, 0, self._intrinsics.ppx],
                                 [0, self._intrinsics.fy, self._intrinsics.ppy], [0, 0, 1]],
@@ -308,8 +311,9 @@ class Camera(Stream):
     @property
     def depth_scale(self):
         """
-            Conversation factor to go from raw depth data to depth in meters. It is = to 0.001 by default for
-            Realsense cameras. Warning: Open3D's depth_scale is = 1/depth_scale.
+        Conversion factor to go from raw depth data to depth in meters. It is = to 0.001 by default for Realsense
+        cameras. Warning: Open3D's depth_scale is = 1/depth_scale.
+
         Returns:
             depth_scale (float): scaling factor to get depth from Z16 to depth in meters.
         """
@@ -319,6 +323,7 @@ class Camera(Stream):
     def timestamp(self):
         """
         Access the timestamp of the latest frame
+
         Returns:
             timestamp: Timestamp of the most recent frame (ms), averaged of the two streams' timestamp.
         """
@@ -329,10 +334,56 @@ class Camera(Stream):
     def timestamp(self, timestamp):
         """
         Ensure timestamp is read-only.
+
         Args:
             timestamp: New timestamp
         """
         logging.warning("Tried to manually change the timestamp")
+        pass
+
+    @property
+    def sensor_temp(self):
+        """
+        ASIC depth sensor temperature
+
+        Returns:
+            sensor_temp(float): sensor temperature
+        """
+        return self._pipe.get_active_profile().get_device().\
+            first_depth_sensor().get_option(rs2.option.projector_temperature)
+
+    @sensor_temp.setter
+    def sensor_temp(self, temp):
+        """
+        Ensure temperature is read-only.
+
+        Args:
+            temp: New temperature value
+        """
+        logging.warning("Tried to manually change the sensor temperature")
+        pass
+
+    @property
+    def projector_temp(self):
+        """
+        Projector depth sensor temperature
+
+        Returns:
+            projector_temp(float): projector temperature
+        """
+        return self._pipe.get_active_profile().get_device().\
+            first_depth_sensor().get_option(rs2.option.projector_temperature)
+
+    @projector_temp.setter
+    def projector_temp(self, temp):
+        """
+        Ensure temperature is read-only.
+
+        Args:
+            temp: New temperature value
+        """
+
+        logging.warning("Tried to manually change the projector temperature")
         pass
 
     def compute_pcd(self, new_frame=False):
@@ -440,6 +491,10 @@ class Camera(Stream):
 
         else:
             self._frame = (rs_depth, rs_color)
+
+        # Reset the point cloud as it no longer represents the current frame. This will force calling of
+        # compute_pcd method if the pcd attribute is accessed prior to a call to compute_pcd.
+        self._pcd = o3d.t.geometry.PointCloud(device=DEVICE)
         return self._frame
 
     def warmup(self):
@@ -570,6 +625,7 @@ class Recording(Stream):
     def frame(self):
         """
         Access the last frame.
+
         Returns:
             frame: A tuple containing the last frame ordered (depth, colour)
         """
@@ -581,8 +637,9 @@ class Recording(Stream):
     def pose(self):
         """
         Access the 4x4 matrix representing the camera pose.
+
         Returns:
-            pose (numpy ndarray): a 4x4 matrix representing the camera to world transform
+            pose (o3d.core.Tensor): a 4x4 matrix representing the camera to world transform
         """
 
         if self._pose is None:
@@ -599,8 +656,9 @@ class Recording(Stream):
     def pcd(self):
         """
         Access the point cloud form of the current frame.
+
         Returns:
-            pcd: A tensor-based Open3D point cloud object.
+            pcd(o3d.t.geometry.PointCloud): A tensor-based Open3D point cloud object.
         """
         if self._pcd.is_empty():
             self.compute_pcd(False)
@@ -610,9 +668,10 @@ class Recording(Stream):
     @property
     def intrinsics(self):
         """
-            Access the camera's pinhole camera intrinsics.
-            Returns:
-                intrinsics (o3d.t.Tensor): 3x3 pinhole camera intrinsics matrix
+        Access the camera's pinhole camera intrinsics.
+
+        Returns:
+            intrinsics (o3d.t.Tensor): 3x3 pinhole camera intrinsics matrix
         """
         return o3d.core.Tensor([[self._intrinsics.fx, 0, self._intrinsics.ppx],
                                 [0, self._intrinsics.fy, self._intrinsics.ppy], [0, 0, 1]],
@@ -621,8 +680,9 @@ class Recording(Stream):
     @property
     def depth_scale(self):
         """
-            Conversation factor to go from raw depth data to depth in meters. It is = to 0.001 by default for
-            Realsense cameras. Warning: Open3D's depth_scale is = 1/depth_scale.
+        Conversion factor to go from raw depth data to depth in meters. It is = to 0.001 by default for Realsense
+        cameras. Warning: Open3D's depth_scale is = 1/depth_scale.
+
         Returns:
             depth_scale (float): scaling factor to get depth from Z16 to depth in meters.
         """
@@ -635,8 +695,9 @@ class Recording(Stream):
     def timestamp(self):
         """
         Access the timestamp of the latest frame
+
         Returns:
-            timestamp: Timestamp of the most recent frame (ms), averaged of the two streams' timestamp.
+            timestamp(float): Timestamp of the most recent frame (ms), averaged of the two streams' timestamp.
         """
 
         return self._timestamp
@@ -645,10 +706,54 @@ class Recording(Stream):
     def timestamp(self, timestamp):
         """
         Ensure timestamp is read-only.
+
         Args:
             timestamp: New timestamp
         """
         logging.warning("Tried to manually change the timestamp")
+        pass
+
+    @property
+    def sensor_temp(self):
+        """
+        ASIC depth sensor temperature
+
+        Returns:
+            sensor_temp(float): sensor temperature
+        """
+        return self._device.first_depth_sensor().get_option(rs2.option.asic_temperature)
+
+    @sensor_temp.setter
+    def sensor_temp(self, temp):
+        """
+        Ensure temperature is read-only.
+
+        Args:
+            temp: New temperature value
+        """
+        logging.warning("Tried to manually change the sensor temperature")
+        pass
+
+    @property
+    def projector_temp(self):
+        """
+        Projector depth sensor temperature
+
+        Returns:
+            projector_temp(float): projector temperature
+        """
+        return self._device.first_depth_sensor().get_option(rs2.option.projector_temperature)
+
+    @projector_temp.setter
+    def projector_temp(self, temp):
+        """
+        Ensure temperature is read-only.
+
+        Args:
+            temp: New temperature value
+        """
+
+        logging.warning("Tried to manually change the projector temperature")
         pass
 
     def seek(self, time_delta):
@@ -774,6 +879,9 @@ class Recording(Stream):
         else:
             self._frame = (rs_depth, rs_color)
 
+        # Reset the point cloud as it no longer represents the current frame. This will force calling of
+        # compute_pcd method if the pcd attribute is accessed prior to a call to compute_pcd.
+        self._pcd = o3d.t.geometry.PointCloud(device=DEVICE)
         return self._frame
 
     def get_o3d_intrinsics(self):
@@ -1142,6 +1250,10 @@ class DualRecording(DualStream):
 
         self._timestamp = (self.stream1.timestamp + self.stream2.timestamp)/2
         self._frame = (f1, f2)
+
+        # Reset the point cloud as it no longer represents the current frame. This will force calling of
+        # compute_pcd method if the pcd attribute is accessed prior to a call to compute_pcd.
+        self._pcd = o3d.t.geometry.PointCloud(device=DEVICE)
         return self._frame
 
     def start_stream(self):
@@ -1401,6 +1513,10 @@ class DualCamera(DualStream):
 
         self._timestamp = (self.stream1.timestamp + self.stream2.timestamp)/2
         self._frame = (f1, f2)
+
+        # Reset the point cloud as it no longer represents the current frame. This will force calling of
+        # compute_pcd method if the pcd attribute is accessed prior to a call to compute_pcd.
+        self._pcd = o3d.t.geometry.PointCloud(device=DEVICE)
         return self._frame
 
     def start_stream(self, rec=False, bag_file=None):
