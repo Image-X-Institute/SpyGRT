@@ -165,8 +165,17 @@ class Calibrator:
         else:
             ret, corners = cv.findChessboardCornersSB(color, [col, rows], corners)
 
-        if not ret:
-            return None, None, False
+        if not ret and algorithm == 'reg':
+            ret, corners = cv.findChessboardCornersSB(color, [col, rows], corners)
+            if not ret:
+                return None, None, False
+        elif not ret:
+            ret, corners = cv.findChessboardCorners(color, [col, rows], corners)
+            if ret:
+                corners = cv.cornerSubPix(color, corners, [11, 11], [-1, -1],
+                                          (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.1))
+            else:
+                return None, None, False
 
         corners3d = []
 
