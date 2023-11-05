@@ -260,9 +260,18 @@ class Calibrator:
             else:
                 ret, corners = cv.findChessboardCornersSB(color, [col, rows], corners)
 
-            # Specific error flag if board cannot be found.
-            if not ret:
-                return None, None, False
+            if not ret and algorithm == 'reg':
+                ret, corners = cv.findChessboardCornersSB(color, [col, rows], corners)
+                if not ret:
+                    return None, None, False
+            elif not ret:
+                ret, corners = cv.findChessboardCorners(color, [col, rows], corners)
+                if ret:
+                    gray = cv.cvtColor(color, cv.COLOR_RGB2GRAY)
+                    corners = cv.cornerSubPix(gray, corners, [11, 11], [-1, -1],
+                                              (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.1))
+                else:
+                    return None, None, False
 
             corners3d = []
             inv_epose = self._epose.inv()
