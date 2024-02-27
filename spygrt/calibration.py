@@ -52,8 +52,7 @@ class Calibrator:
             gt: (numpy.ndarray): Array of the ideal position of each corner on the board - first corner is positive
                 Y and negative X (IEC coordinate), camera is inf to the calibration board and corner order is row major
         """
-        # Stream object to query stream setting/parameters. Private as we want to control what method of the stream
-        # a Calibrator object can access. Potentially code breaking if used to call get_frames().
+
         if gt is None:
             rows = DEFAULT_ROW
             col = DEFAULT_COLUMN
@@ -64,8 +63,9 @@ class Calibrator:
             self._gt[:, 0] = (self._gt[:, 0] - 4 * size) * 1
         else:
             self._gt = gt
-            # Trick to deal with OpenCV chessboard corner detection
-            self._gt[:, 0] *= -1
+        self._switch = False
+        # Stream object to query stream setting/parameters. Private as we want to control what method of the stream
+        # a Calibrator object can access. Potentially code breaking if used to call get_frames().
         self._stream = stream
         # Intrinsic matrix of the camera
         # Pose of the camera - modified by the different calibration methods.
@@ -102,9 +102,8 @@ class Calibrator:
         Returns:
             gt(numpy.ndarray): a Row*Column by 3 array containing the real position of each corner in row major.
         """
-        temp = self._gt
-        temp[:, 0] *= -1
-        return temp
+        #temp[:, 0] *= -1
+        return self._gt.copy()
 
     @gt.setter
     def gt(self, gt):
@@ -114,10 +113,8 @@ class Calibrator:
             gt: a Row*Column by 3 array containing the real position of each corner in row major.
 
         """
-
         self._gt = gt
-        # Trick to deal with OpenCV chessboard corner detection
-        self._gt[:, 0] *= -1
+
 
     def write_cal(self, filename=None):
         """
@@ -143,9 +140,9 @@ class Calibrator:
             algorithm([char]): Corner finding algorithm ('SB' or 'reg')
 
         Returns:
-            corners3d: (numpy.array) 3D coordinate of all the corners of the calibration board
+            switch: (Bool) Whether input corner segmentation algorithm worked or if there was a switch.
         """
-
+        switch = False
         corners = np.asarray([])
         frame = self._stream.frame
 
@@ -169,11 +166,13 @@ class Calibrator:
             ret, corners = cv.findChessboardCornersSB(color, [col, rows], corners)
             if not ret:
                 return None, None, False
+            self._switch = True
         elif not ret:
             ret, corners = cv.findChessboardCorners(color, [col, rows], corners)
             if ret:
                 corners = cv.cornerSubPix(color, corners, [11, 11], [-1, -1],
                                           (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.1))
+                self._switch = True
             else:
                 return None, None, False
 
@@ -190,7 +189,7 @@ class Calibrator:
         corners3d = np.asarray(corners3d)
 
         self.corners.append(corners3d)
-        return corners3d
+        return switch
 
     def find_corners3d(self, col=DEFAULT_COLUMN, rows=DEFAULT_ROW, size=DEFAULT_SQUARE_SIZE, algorithm='SB'):
         """
@@ -221,18 +220,18 @@ class Calibrator:
         # If there is no initial pose estimate for raytracing.
         if self._epose is None:
             # Get an initial pose estimate based on corners from color image from a single frame.
-            if algorithm == 'reg':
-                self.find_corners3d_direct(col, rows, algorithm='reg')
-            else:
-                self.find_corners3d_direct(col, rows, algorithm='SB')
-            temp = self._pose
-            # Specifically calling self.gt over self._gt to get the x axis to switch the first time.
-            self._gt = self.gt
-            self.align_to_board_alt(cal2=None, col=col, rows=rows, size=size)
+
+            switch = self.find_corners3d_direct(col, rows, algorithm=algorithm)
             if self.corners is None:
                 return None, None, False
-            # Specifically calling self.gt over self._gt to reset the x axi.
-            self._gt = self.gt
+            # Setting self._switch to True if we are using SB corner finding algorithm
+            temp = self._pose
+            if (algorithm == 'reg' and switch) or (algorithm != 'reg' and not switch):
+                gt = self.gt.copy()
+                gt[:, 1] = np.flip(gt[:, 1], axis=0)
+                gt[:, 0] = np.flip(gt[:, 0], axis=0)
+            self.align_to_board_alt(cal2=None, col=col, rows=rows, size=size, gt=gt)
+
             self._epose = self._pose
             self._pose = temp
             # Reset the corners variable to remove the corners coordinate from the color frame from future
@@ -240,6 +239,7 @@ class Calibrator:
             self.corners = []
             self._mean_corners = None
         else:
+
             # Compute pcd based on initial guess (see above if statement)
             pcd = self._stream.compute_pcd().transform(self._epose)
             # Position of the viewpoint directly above the board
@@ -251,23 +251,29 @@ class Calibrator:
             color = (rgbd.color.dilate(1).as_tensor().cpu().numpy() * 255).astype(np.uint8)
             color = fill(color)
             depth = rgbd.depth.dilate(4).as_tensor().cpu().numpy()
+
+            ### This could be streamlined - could bug if corner finding  algorithm switches in each iteration ###
+
             if algorithm == 'reg':
                 ret, corners = cv.findChessboardCorners(color, [col, rows], corners)
                 if ret:
                     gray = cv.cvtColor(color, cv.COLOR_RGB2GRAY)
+                    self._switch = False
                     corners = cv.cornerSubPix(gray, corners, [11, 11], [-1, -1],
                                               (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.1))
             else:
                 ret, corners = cv.findChessboardCornersSB(color, [col, rows], corners)
-
+                self._switch = True
             if not ret and algorithm == 'reg':
                 ret, corners = cv.findChessboardCornersSB(color, [col, rows], corners)
                 if not ret:
                     return None, None, False
+                self._switch = True
             elif not ret:
                 ret, corners = cv.findChessboardCorners(color, [col, rows], corners)
                 if ret:
                     gray = cv.cvtColor(color, cv.COLOR_RGB2GRAY)
+                    self._switch = False
                     corners = cv.cornerSubPix(gray, corners, [11, 11], [-1, -1],
                                               (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.1))
                 else:
@@ -302,16 +308,16 @@ class Calibrator:
 
         return self._mean_corners
 
-    def get_corners(self):
+    def get_corners(self, force=False):
         """
-        Get the 3D coordinate of coordinates in the world frame of reference.
+        Get the 3D coordinate of corners in the world frame of reference.
 
         Returns: (numpy.array) Array of the corners in the world frame of reference
 
         """
-        corners = np.vstack((self.corners.T, np.ones(len(self.corners)))).T
-        corners = self.pose.numpy() @ corners.T
-        return corners[0:3].T
+
+        return (self.pose.cpu().numpy()@np.hstack((self.avg_corners(force=force).reshape([40, 3]),
+                                                   np.ones(40).reshape([40, 1]))).T)[0:3].T
 
     # MAY BE DEPRECATED - INDUCES CALIBRATION ERRORS
     def corners_scale(self, size=DEFAULT_SQUARE_SIZE):
@@ -335,14 +341,15 @@ class Calibrator:
             self._mean_corners[i] = (s_mat @ temp)[0:3]
         self._mean_corners.reshape([DEFAULT_ROW*DEFAULT_COLUMN, 3])
 
-
     def align_cameras(self, target):
         """ Find the transform between the two cameras based on the corners of the chessboard.
         If the stream has ended, update the point cloud with the last frame.
         """
 
-        s_corners = self.avg_corners().reshape([40, 3])
+        s_corners = self.avg_corners(force=True).reshape([40, 3])
         t_corners = target.avg_corners().reshape([40, 3])
+        if (self._switch and not target._switch) or (not self._switch and target._switch):
+            s_corners[:, 0] *= -1
         s_corners = o3d.core.Tensor(s_corners, dtype=o3d.core.Dtype.Float32, device=DEVICE)
         t_corners = o3d.core.Tensor(t_corners, dtype=o3d.core.Dtype.Float32, device=DEVICE)
         s_pcd = o3d.t.geometry.PointCloud(s_corners)
@@ -397,20 +404,21 @@ class Calibrator:
         if cal2 is not None:
             cal2._pose = pose @ cal2.pose
 
-    def align_to_board_alt(self, cal2=None, col=DEFAULT_COLUMN, rows=DEFAULT_ROW, size=DEFAULT_SQUARE_SIZE):
+    def align_to_board_alt(self, cal2=None, col=DEFAULT_COLUMN, rows=DEFAULT_ROW, size=DEFAULT_SQUARE_SIZE, gt=None):
         """Find the transform that aligns the sensor's frame of reference to a frame of reference that is defined by a chessboard
             The X axis is aligned with the rows of the chessboard
             The Y axis is aligned with the columns of the chessboard
             The Z axis is perpendicular to the chessboard
         """
+        if gt is None:
+            gt = self.gt.copy()
 
-        #NEED TO ADJUST OBJP CREATION FOR CUSTOM 0 CORNER DEFINITION
-        corners3d = self.avg_corners().reshape([rows*col, 3])
+        corners3d = self.avg_corners(force=True).reshape([rows*col, 3])
 
-        t_pcd = o3d.t.geometry.PointCloud(o3d.core.Tensor(self._gt, dtype=o3d.core.Dtype.Float32, device=DEVICE))
+        t_pcd = o3d.t.geometry.PointCloud(o3d.core.Tensor(gt, dtype=o3d.core.Dtype.Float32, device=DEVICE))
         s_pcd = o3d.t.geometry.PointCloud(o3d.core.Tensor(corners3d, dtype=o3d.core.Dtype.Float32, device=DEVICE))
-        corr = np.zeros((len(self._gt), 1), dtype=np.int64)
-        corr[:, 0] = np.arange(0, len(self._gt))
+        corr = np.zeros((len(gt), 1), dtype=np.int64)
+        corr[:, 0] = np.arange(0, len(gt))
         icp = o3d.t.pipelines.registration.TransformationEstimationPointToPoint()
 
         pose = icp.compute_transformation(s_pcd, t_pcd, o3d.core.Tensor(corr, device=DEVICE)). \
