@@ -128,7 +128,7 @@ class Calibrator:
 
         np.savetxt(filename, self.pose.cpu().numpy())
 
-    def find_corners3d_direct(self, col=DEFAULT_COLUMN, rows=DEFAULT_ROW, algorithm='SB'):
+    def find_corners3d_direct(self, col=DEFAULT_COLUMN, rows=DEFAULT_ROW):
         """
         Use OpenCV's findChessboardCorners function to find the corners in the color frame captured by the camera.
         The 3D position of the corners are then extrapolated from the depth images and added to the 'corners' instance
@@ -137,47 +137,34 @@ class Calibrator:
         Args:
             col: (int) Number of column on the calibration board.
             rows: (int) Number of rows on the calibration board.
-            algorithm([char]): Corner finding algorithm ('SB' or 'reg')
 
         Returns:
-            switch: (Bool) Whether input corner segmentation algorithm worked or if there was a switch.
+
         """
-        switch = False
-        corners = np.asarray([])
         frame = self._stream.frame
 
         # Obtaining the frame data in numpy format
         if type(frame[0]) == o3d.t.geometry.Image:
+            im = frame[1].as_tensor().cpu().numpy()
             color = frame[1].rgb_to_gray().as_tensor().cpu().numpy()
             depth = frame[0].as_tensor().cpu().numpy()
 
         else:
             depth = np.asanyarray(frame[0].get_data())
             color = np.asanyarray(frame[1].get_data())
-        if algorithm == 'reg':
-            ret, corners = cv.findChessboardCorners(color, [col, rows], corners)
-            if ret:
-                corners = cv.cornerSubPix(color, corners, [11, 11], [-1, -1],
-                                          (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.1))
-        else:
-            ret, corners = cv.findChessboardCornersSB(color, [col, rows], corners)
 
-        if not ret and algorithm == 'reg':
-            ret, corners = cv.findChessboardCornersSB(color, [col, rows], corners)
-            if not ret:
-                return None, None, False
-            self._switch = True
-        elif not ret:
-            ret, corners = cv.findChessboardCorners(color, [col, rows], corners)
-            if ret:
-                corners = cv.cornerSubPix(color, corners, [11, 11], [-1, -1],
-                                          (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.1))
-                self._switch = True
-            else:
-                return None, None, False
+        ret, corners = cv_corners(color, alg='SB')
+        if not ret:
+            ret, corners = cv_corners(color, alg='reg')
+        if not ret:
+            # Failed to find corners in image, to be consistent with previous implementation
+            return None, None, False
+        rgb = im[int(corners[0][0][1]) - 5, int(corners[0][0][0]) - 20]
+
+        if float(rgb[1]) + float(rgb[2]) < float(1.5 * rgb[0]):
+            corners = np.flip(np.asarray(corners), axis=0)
 
         corners3d = []
-
         for corner in corners:
             [c, r] = [int(np.rint(corner[0][1])), int(np.rint(corner[0][0]))]
             temp = self._stream.intrinsics.inv() @ (float(depth[c, r, 0] * 0.001) *
@@ -189,9 +176,9 @@ class Calibrator:
         corners3d = np.asarray(corners3d)
 
         self.corners.append(corners3d)
-        return switch
 
-    def find_corners3d(self, col=DEFAULT_COLUMN, rows=DEFAULT_ROW, size=DEFAULT_SQUARE_SIZE, algorithm='SB'):
+
+    def find_corners3d(self, col=DEFAULT_COLUMN, rows=DEFAULT_ROW, size=DEFAULT_SQUARE_SIZE):
         """
         Use OpenCV's findChessboardCorners function to find the corners in a color frame taken by a camera situated
         directly above the chessboard. This color image is simulated using a raytracing algorithm. The 3D position of
@@ -208,7 +195,6 @@ class Calibrator:
             col: (int) Number of column on the calibration board.
             rows: (int) Number of rows on the calibration board.
             size: (float) Size (in metres) of the length of one square on the calibration board.
-            algorithm([char]): Corner finding algorithm ('SB' or 'reg')
 
         Returns:
             corners3d: (numpy.array) 3D coordinate of all the corners of the calibration board
@@ -221,15 +207,18 @@ class Calibrator:
         if self._epose is None:
             # Get an initial pose estimate based on corners from color image from a single frame.
 
-            switch = self.find_corners3d_direct(col, rows, algorithm=algorithm)
+            self.find_corners3d_direct(col, rows)
             if self.corners is None:
                 return None, None, False
-            # Setting self._switch to True if we are using SB corner finding algorithm
+
+
+
+            # WILL NEED A WAY TO SET GT IN CASE RED CORNERS ARE AT THE TOP.
+            #gt = self.gt.copy()
+            #gt[:, 1] = np.flip(gt[:, 1], axis=0)
+            #gt[:, 0] = np.flip(gt[:, 0], axis=0)
+            gt = self.gt
             temp = self._pose
-            if (algorithm == 'reg' and switch) or (algorithm != 'reg' and not switch):
-                gt = self.gt.copy()
-                gt[:, 1] = np.flip(gt[:, 1], axis=0)
-                gt[:, 0] = np.flip(gt[:, 0], axis=0)
             self.align_to_board_alt(cal2=None, col=col, rows=rows, size=size, gt=gt)
 
             self._epose = self._pose
@@ -239,45 +228,31 @@ class Calibrator:
             self.corners = []
             self._mean_corners = None
         else:
-
             # Compute pcd based on initial guess (see above if statement)
             pcd = self._stream.compute_pcd().transform(self._epose)
             # Position of the viewpoint directly above the board
-            ext = o3d.core.Tensor(np.identity(4), dtype=o3d.core.Dtype.Float64)
+            ext = o3d.core.Tensor(np.identity(4), dtype=o3d.core.Dtype.Float32, device=DEVICE)
             ext[2][3] = 0.75 # 75 cm above the board
+            ext[0,0] = -1
             # Create RGB-D image from directly above the board.
             rgbd = pcd.project_to_rgbd_image(1280, 720, self._stream.intrinsics, ext)
             # Interpolation to cover the holes from the change in perspective.
             color = (rgbd.color.dilate(1).as_tensor().cpu().numpy() * 255).astype(np.uint8)
             color = fill(color)
+            gray = cv.cvtColor(color, cv.COLOR_RGB2GRAY)
             depth = rgbd.depth.dilate(4).as_tensor().cpu().numpy()
 
             ### This could be streamlined - could bug if corner finding  algorithm switches in each iteration ###
+            ret, corners = cv_corners(gray, alg='SB')
+            if not ret:
+                ret, corners = cv_corners(gray, alg='reg')
+            if not ret:
+                # Failed to find corners in image, to be consistent with previous implementation
+                return None, None, False
+            rgb = color[int(corners[0][0][1]) - 5, int(corners[0][0][0]) - 20]
 
-            if algorithm == 'reg':
-                ret, corners = cv.findChessboardCorners(color, [col, rows], corners)
-                if ret:
-                    gray = cv.cvtColor(color, cv.COLOR_RGB2GRAY)
-                    self._switch = False
-                    corners = cv.cornerSubPix(gray, corners, [11, 11], [-1, -1],
-                                              (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.1))
-            else:
-                ret, corners = cv.findChessboardCornersSB(color, [col, rows], corners)
-                self._switch = True
-            if not ret and algorithm == 'reg':
-                ret, corners = cv.findChessboardCornersSB(color, [col, rows], corners)
-                if not ret:
-                    return None, None, False
-                self._switch = True
-            elif not ret:
-                ret, corners = cv.findChessboardCorners(color, [col, rows], corners)
-                if ret:
-                    gray = cv.cvtColor(color, cv.COLOR_RGB2GRAY)
-                    self._switch = False
-                    corners = cv.cornerSubPix(gray, corners, [11, 11], [-1, -1],
-                                              (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.1))
-                else:
-                    return None, None, False
+            if float(rgb[1]) + float(rgb[2]) < float(1.5 * rgb[0]):
+                corners = np.flip(np.asarray(corners), axis=0)
 
             corners3d = []
             inv_epose = self._epose.inv()
@@ -292,8 +267,7 @@ class Calibrator:
 
                 one = o3d.core.Tensor(1, dtype=o3d.core.Dtype.Float32, device=DEVICE)
                 temp = temp.append(one)
-                temp[2] -= 0.75
-                temp = inv_epose @ temp
+                temp = inv_epose@ext.inv()@temp
                 temp = temp[0:3]
                 corners3d.append(temp.cpu().numpy())
 
@@ -336,10 +310,10 @@ class Calibrator:
         s_mat = np.identity(4) * scale
         s_mat[3, 3] = 1
         self._pose = o3d.core.Tensor(s_mat, dtype=o3d.core.Dtype.Float32, device=DEVICE) @ self.pose
-        for i, corner in enumerate(corners):
-            temp = np.append(corner, [1])
-            self._mean_corners[i] = (s_mat @ temp)[0:3]
-        self._mean_corners.reshape([DEFAULT_ROW*DEFAULT_COLUMN, 3])
+        #for i, corner in enumerate(corners):
+        #    temp = np.append(corner, [1])
+        #    self._mean_corners[i] = (s_mat @ temp)[0:3]
+        #self._mean_corners.reshape([DEFAULT_ROW*DEFAULT_COLUMN, 3])
 
     def align_cameras(self, target):
         """ Find the transform between the two cameras based on the corners of the chessboard.
@@ -417,6 +391,7 @@ class Calibrator:
 
         t_pcd = o3d.t.geometry.PointCloud(o3d.core.Tensor(gt, dtype=o3d.core.Dtype.Float32, device=DEVICE))
         s_pcd = o3d.t.geometry.PointCloud(o3d.core.Tensor(corners3d, dtype=o3d.core.Dtype.Float32, device=DEVICE))
+        s_pcd.transform(self.pose)
         corr = np.zeros((len(gt), 1), dtype=np.int64)
         corr[:, 0] = np.arange(0, len(gt))
         icp = o3d.t.pipelines.registration.TransformationEstimationPointToPoint()
@@ -427,7 +402,34 @@ class Calibrator:
         if cal2 is not None:
             cal2._pose = pose @ cal2.pose
 
+
 # Helper functions
+def cv_corners(color, alg='reg', col=DEFAULT_COLUMN, rows=DEFAULT_ROW,):
+    """
+    Takes an image containing a checkerboard and finds the position of the corners in the image using openCV built-in
+    functions.
+
+    Args:
+        color(np.ndarray): RGB array containing the image data.
+        alg([char]): string identifying the default algorithm to use to get the corners.
+        col(int): number of column on the checkerboard
+        rows(int): number of rows on the checkerboard..
+
+    Returns:
+        ret(bool): Whether the corners could be found
+        corners(np.ndarray): Numpy array containing the 2D pixel coordinate of the corners.
+
+    """
+    corners = np.asarray([])
+    if alg == 'reg':
+        ret, corners = cv.findChessboardCorners(color, [col, rows], corners)
+        if ret:
+            corners = cv.cornerSubPix(color, corners, [11, 11], [-1, -1],
+                                      (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.1))
+    else:
+        ret, corners = cv.findChessboardCornersSB(color, [col, rows], corners)
+    return ret, corners
+
 def fill(im, ksize=9, copy=False):
     """
       Takes an image resulting from the projection of a point cloud (with holes) and fill the holes with an average
