@@ -231,7 +231,7 @@ class Tracker:
             return T.numpy().T[-1][0:3]
 
     @staticmethod
-    def compute_rotation(T):
+    def compute_rotation(T,conv='XYZ'):
         """Extract rotations from an affine transformation matrix."""
 
         if T.is_cuda:
@@ -244,16 +244,30 @@ class Tracker:
 
         sy = np.sqrt(R[0, 0] * R[0, 0] + R[1, 0] * R[1, 0])
         singular = sy < 1e-6
+        if conv == 'XYZ':
+            sy = np.sqrt(R[0, 0] * R[0, 0] + R[0, 1] * R[0, 1])
+            singular = sy < 1e-6
+            if not singular:
+                rx = np.arctan2(-R[1, 2], R[2, 2]) * 180 / np.pi
+                ry = np.arctan2(R[0, 2], sy) * 180 / np.pi
+                rz = np.arctan2(-R[0, 1], R[0, 0]) * 180 / np.pi
 
-        if not singular:
-            rx = np.arctan2(R[2, 1], R[2, 2]) * 180 / np.pi
-            ry = np.arctan2(-R[2, 0], sy) * 180 / np.pi
-            rz = np.arctan2(R[1, 0], R[0, 0]) * 180 / np.pi
+            else:  # May need to double-check axes here
+                rx = np.arctan2(-R[1, 2], R[1, 1]) * 180 / np.pi
+                ry = np.arctan2(-R[2, 0], sy) * 180 / np.pi
+                rz = 0
+        elif conv == 'ZYX':
+            sy = np.sqrt(R[0, 0] * R[0, 0] + R[1, 0] * R[1, 0])
+            singular = sy < 1e-6
+            if not singular:
+                rx = np.arctan2(R[2, 1], R[2, 2]) * 180 / np.pi
+                ry = np.arctan2(-R[2, 0], sy) * 180 / np.pi
+                rz = np.arctan2(R[1, 0], R[0, 0]) * 180 / np.pi
 
-        else:  # May need to double-check axes here
-            rx = np.arctan2(-R[1, 2], R[1, 1]) * 180 / np.pi
-            ry = np.arctan2(-R[2, 0], sy) * 180 / np.pi
-            rz = 0
+            else:  # May need to double-check axes here
+                rx = np.arctan2(-R[1, 2], R[1, 1]) * 180 / np.pi
+                ry = np.arctan2(-R[2, 0], sy) * 180 / np.pi
+                rz = 0
 
         return [rx, ry, rz]
 

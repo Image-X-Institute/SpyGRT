@@ -402,6 +402,18 @@ class Calibrator:
         if cal2 is not None:
             cal2._pose = pose @ cal2.pose
 
+    def offset(self, x, y, z):
+        """
+
+        Args:
+            x: x offset
+            y: y offset
+            z: z offset
+
+        """
+        offset = o3d.core.Tensor.eye(4, dtype=o3d.core.Dtype.Float32, device=DEVICE)
+        offset[0:3, 3] = [x, y, z]
+        self._pose = offset@self._pose
 
 # Helper functions
 def cv_corners(color, alg='reg', col=DEFAULT_COLUMN, rows=DEFAULT_ROW,):
