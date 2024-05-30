@@ -159,9 +159,7 @@ class Calibrator:
         if not ret:
             # Failed to find corners in image, to be consistent with previous implementation
             return None, None, False
-        rgb = im[int(corners[0][0][1]) - 5, int(corners[0][0][0]) - 20]
-
-        if float(rgb[1]) + float(rgb[2]) < float(1.5 * rgb[0]):
+        if np.sum(corners[0]) > np.sum(corners[-1]):
             corners = np.flip(np.asarray(corners), axis=0)
 
         corners3d = []
@@ -232,8 +230,8 @@ class Calibrator:
             pcd = self._stream.compute_pcd().transform(self._epose)
             # Position of the viewpoint directly above the board
             ext = o3d.core.Tensor(np.identity(4), dtype=o3d.core.Dtype.Float32, device=DEVICE)
-            ext[2][3] = 0.75 # 75 cm above the board
-            ext[0,0] = -1
+            ext[2, 3] = 0.75  # 75 cm above the board
+            ext[0, 0] = -1  # To look at corners with top of image towards the head (open cv convention).
             # Create RGB-D image from directly above the board.
             rgbd = pcd.project_to_rgbd_image(1280, 720, self._stream.intrinsics, ext)
             # Interpolation to cover the holes from the change in perspective.
@@ -246,12 +244,12 @@ class Calibrator:
             ret, corners = cv_corners(gray, alg='SB')
             if not ret:
                 ret, corners = cv_corners(gray, alg='reg')
-            if not ret:
-                # Failed to find corners in image, to be consistent with previous implementation
-                return None, None, False
-            rgb = color[int(corners[0][0][1]) - 5, int(corners[0][0][0]) - 20]
+                if not ret:
+                    # Failed to find corners in image, to be consistent with previous implementation
+                    return None, None, False
 
-            if float(rgb[1]) + float(rgb[2]) < float(1.5 * rgb[0]):
+            # Ensures the first corners is always at the top left of the image (neg x and positive y)
+            if np.sum(corners[0]) > np.sum(corners[-1]):
                 corners = np.flip(np.asarray(corners), axis=0)
 
             corners3d = []
