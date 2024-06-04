@@ -59,7 +59,7 @@ class Calibrator:
             size = DEFAULT_SQUARE_SIZE
             self._gt = np.zeros((rows * col, 3), np.float32)
             self._gt[:, :2] = np.mgrid[0:col, 0:rows].T.reshape(-1, 2) * size
-            self._gt[:, 1] = (self._gt[:, 1] - 2 * size) * -1
+            self._gt[:, 1] = (self._gt[:, 1] - 2 * size)  #* -1
             self._gt[:, 0] = (self._gt[:, 0] - 4 * size) * 1
         else:
             self._gt = gt
@@ -216,6 +216,7 @@ class Calibrator:
             #gt[:, 1] = np.flip(gt[:, 1], axis=0)
             #gt[:, 0] = np.flip(gt[:, 0], axis=0)
             gt = self.gt
+            gt[:, 1] = (self._gt[:, 1] - 2 * size) * -1
             temp = self._pose
             self.align_to_board_alt(cal2=None, col=col, rows=rows, size=size, gt=gt)
 
@@ -230,8 +231,8 @@ class Calibrator:
             pcd = self._stream.compute_pcd().transform(self._epose)
             # Position of the viewpoint directly above the board
             ext = o3d.core.Tensor(np.identity(4), dtype=o3d.core.Dtype.Float32, device=DEVICE)
-            ext[2, 3] = 0.75  # 75 cm above the board
-            ext[0, 0] = -1  # To look at corners with top of image towards the head (open cv convention).
+            ext[2, 3] = 0.85  # 75 cm above the board
+            #ext[0, 0] = -1  # To look at corners with top of image towards the head (open cv convention).
             # Create RGB-D image from directly above the board.
             rgbd = pcd.project_to_rgbd_image(1280, 720, self._stream.intrinsics, ext)
             # Interpolation to cover the holes from the change in perspective.
