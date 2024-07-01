@@ -176,7 +176,7 @@ class Calibrator:
         self.corners.append(corners3d)
 
 
-    def find_corners3d(self, col=DEFAULT_COLUMN, rows=DEFAULT_ROW, size=DEFAULT_SQUARE_SIZE):
+    def find_corners3d(self, col=DEFAULT_COLUMN, rows=DEFAULT_ROW, size=DEFAULT_SQUARE_SIZE, orient = True):
         """
         Use OpenCV's findChessboardCorners function to find the corners in a color frame taken by a camera situated
         directly above the chessboard. This color image is simulated using a raytracing algorithm. The 3D position of
@@ -193,6 +193,7 @@ class Calibrator:
             col: (int) Number of column on the calibration board.
             rows: (int) Number of rows on the calibration board.
             size: (float) Size (in metres) of the length of one square on the calibration board.
+            orient: (bool) Activate force orientation with top left corner being the first.
 
         Returns:
             corners3d: (numpy.array) 3D coordinate of all the corners of the calibration board
@@ -232,6 +233,8 @@ class Calibrator:
             # Position of the viewpoint directly above the board
             ext = o3d.core.Tensor(np.identity(4), dtype=o3d.core.Dtype.Float32, device=DEVICE)
             ext[2, 3] = 0.85  # 75 cm above the board
+            ext[0, 0] = -1
+            ext[1, 1] = -1
             #ext[0, 0] = -1  # To look at corners with top of image towards the head (open cv convention).
             # Create RGB-D image from directly above the board.
             rgbd = pcd.project_to_rgbd_image(1280, 720, self._stream.intrinsics, ext)
@@ -250,7 +253,8 @@ class Calibrator:
                     return None, None, False
 
             # Ensures the first corners is always at the top left of the image (neg x and positive y)
-            if np.sum(corners[0]) > np.sum(corners[-1]):
+            # Can be turned off by setting orient variable to false.
+            if np.sum(corners[0]) > np.sum(corners[-1]) and orient:
                 corners = np.flip(np.asarray(corners), axis=0)
 
             corners3d = []
@@ -403,16 +407,45 @@ class Calibrator:
 
     def offset(self, x, y, z):
         """
-
+            Offset the calibration by shifting origin.
         Args:
-            x: x offset
-            y: y offset
-            z: z offset
+            x: (double) x offset
+            y: (double) y offset
+            z: (double) z offset
 
         """
         offset = o3d.core.Tensor.eye(4, dtype=o3d.core.Dtype.Float32, device=DEVICE)
         offset[0:3, 3] = [x, y, z]
         self._pose = offset@self._pose
+
+    def rotate(self, axis):
+        """
+            Rotate the calibration axis by 90 degree along the input axis.
+        Args:
+            axis: Unit vector - must be either the x, y or z axis.
+
+        """
+
+        if np.linalg.norm(axis) != 1:
+            print("Input for the rotate function axis: " + str(axis) +" is not a unit vector.")
+            return
+        if axis[0]**2 == 1:
+            rot = o3d.core.Tensor.eye(4, dtype=o3d.core.Dtype.Float32, device=DEVICE)
+            rot[1:3, 1] = [0, axis[0]]
+            rot[1:3, 2] = axis[0]*[-1*axis[0], 0]
+        elif axis[1]**2 == 1:
+            rot = o3d.core.Tensor.eye(4, dtype=o3d.core.Dtype.Float32, device=DEVICE)
+            rot[0:3, 0] = [0, 0, -1*axis[1]]
+            rot[0:3, 2] = [axis[1], 0, 0]
+        elif axis[2]**2 == 1:
+            rot = o3d.core.Tensor.eye(4, dtype=o3d.core.Dtype.Float32, device=DEVICE)
+            rot[0:2, 0] = [0, axis[2]]
+            rot[0:2, 1] = [-1*axis[2], 0]
+        else:
+            print("Input for the rotate function axis: " + str(axis) + " is not aligned with one of the main axis.")
+            return
+
+        self._pose = rot@self._pose
 
 # Helper functions
 def cv_corners(color, alg='reg', col=DEFAULT_COLUMN, rows=DEFAULT_ROW,):
