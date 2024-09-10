@@ -764,13 +764,15 @@ class Recording(Stream):
         """
         self._playback.seek(time_delta)
 
-    def compute_pcd(self, new_frame=False):
+    def compute_pcd(self, new_frame=False, depth_max=1.5):
         """
         Computes a Point Cloud from the newest acquired frame.
         Args:
-            new_frame: Bool to determine whether a new frame should be acquired first.
+            new_frame(bool): Bool to determine whether a new frame should be acquired first.
+            depth_max(float): Depth threshold when computer the point cloud.
         Returns:
-            pcd: the point cloud representation of the newest acquired frame in an Open3D Tensor PointCloud format.
+            pcd(o3d.t.Geometry.PointCloud): the point cloud representation of the newest acquired frame in an Open3D
+                                            Tensor PointCloud format.
         """
 
         if new_frame:
@@ -791,7 +793,7 @@ class Recording(Stream):
         else:
             rgbdim = o3d.t.geometry.RGBDImage(self.frame[1], self.frame[0])
             self._pcd = o3d.t.geometry.PointCloud.create_from_rgbd_image(rgbdim, self.intrinsics, depth_scale=1000,
-                                                                         depth_max=1.5)
+                                                                         depth_max=depth_max)
         if self._pose is not None:
             self._pcd.transform(self._pose)
 
