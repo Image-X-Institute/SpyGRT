@@ -226,7 +226,6 @@ class Calibrator:
             # considerations
             self.corners = []
             self._mean_corners = None
-            print("e_pose\n")
         else:
             # Compute pcd based on initial guess (see above if statement)
             pcd = self._stream.compute_pcd().transform(self._epose)
@@ -257,8 +256,6 @@ class Calibrator:
             print(np.sum(corners[0]))
             print(np.sum(corners[-1]))
             if np.sum(corners[0]) > np.sum(corners[-1]) and orient:
-                print("flip 1")
-
                 corners = np.flip(np.asarray(corners), axis=0)
 
             corners3d = []
