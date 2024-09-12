@@ -253,8 +253,6 @@ class Calibrator:
 
             # Ensures the first corners is always at the top left of the image (neg x and positive y)
             # Can be turned off by setting orient variable to false.
-            print(np.sum(corners[0]))
-            print(np.sum(corners[-1]))
             if np.sum(corners[0]) > np.sum(corners[-1]) and orient:
                 corners = np.flip(np.asarray(corners), axis=0)
 
