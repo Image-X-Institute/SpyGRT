@@ -2,5 +2,4 @@ pyrealsense2>=2.50.0
 open3d>=0.17.0
 numpy>=1.18.1
 opencv-python>=4.5.1
-spygrt >=0.1.0
 setuptools>=45.2.0
