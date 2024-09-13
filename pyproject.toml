@@ -26,7 +26,7 @@ dependencies = [
 ]
 
 [project.urls]
-Download = "https://github.com/ACRF-Image-X-Institute/SpyGRT/archive/refs/tags/v_01.tar.gz"
+Download = "https://github.com/Image-X-Institute/SpyGRT/archive/refs/tags/v_1.0.0.tar.gz"
 Homepage = "https://github.com/ACRF-Image-X-Institute/SpyGRT"
 
 [tool.hatch.version]
