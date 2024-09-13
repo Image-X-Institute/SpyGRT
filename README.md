@@ -30,9 +30,10 @@ pip install -e .
 
 If you want to build from source, installation instructions available [here](https://github.com/IntelRealSense/librealsense). The code has currently only been tested up to release version 2.5.0 but should work with more recent releases. 
 
-#### 2. Open3D library v.0.15.0 or later
+#### 2. Open3D library v.0.17.0 or later
 
 If you want to build it from source, full release available [here](https://github.com/PointCloudLibrary/pcl/releases) and instructions to compile it yourself are available [here](http://www.open3d.org/docs/release/getting_started.html).
+You will need to install from source in order to use a GPU. 
 
 #### 3. OpenCV 
 
