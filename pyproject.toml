@@ -1,0 +1,38 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "SpyGRT"
+dynamic = ["version"]
+description = "Toolkit to build SGRT applications"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.7, <=3.11"
+authors = [
+    { name = "Youssef Ben Bouchta", email = "youssef.benbouchta@sydney.edu.au" },
+]
+keywords = [
+    "SGRT",
+    "radiation-oncology",
+    "radiotherapy",
+    "realsense",
+]
+dependencies = [
+    "numpy",
+    "open3d >= 0.17",
+    "opencv-python",
+    "pyrealsense2",
+]
+
+[project.urls]
+Download = "https://github.com/ACRF-Image-X-Institute/SpyGRT/archive/refs/tags/v_01.tar.gz"
+Homepage = "https://github.com/ACRF-Image-X-Institute/SpyGRT"
+
+[tool.hatch.version]
+path = "spygrt/__init__.py"
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/spygrt",
+]
