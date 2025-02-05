@@ -174,6 +174,7 @@ class Calibrator:
         corners3d = np.asarray(corners3d)
 
         self.corners.append(corners3d)
+        return corners, ret
 
     def find_corners3d(self, col=DEFAULT_COLUMN, rows=DEFAULT_ROW, size=DEFAULT_SQUARE_SIZE, orient=True):
         """
@@ -205,9 +206,9 @@ class Calibrator:
         if self._epose is None:
             # Get an initial pose estimate based on corners from color image from a single frame.
 
-            self.find_corners3d_direct(col, rows)
+            corn, ret = self.find_corners3d_direct(col, rows)
             if self.corners is None:
-                return None, None, False
+                return None, False
 
 
 
@@ -226,12 +227,13 @@ class Calibrator:
             # considerations
             self.corners = []
             self._mean_corners = None
+            return corn, ret
         else:
             # Compute pcd based on initial guess (see above if statement)
             pcd = self._stream.compute_pcd().transform(self._epose)
             # Position of the viewpoint directly above the board
             ext = o3d.core.Tensor(np.identity(4), dtype=o3d.core.Dtype.Float32, device=DEVICE)
-            ext[2, 3] = 0.85  # 75 cm above the board
+            ext[2, 3] = 0.85  # 85 cm above the board
             #ext[0, 0] = -1
             #ext[1, 1] = -1
             #ext[0, 0] = -1  # To look at corners with top of image towards the head (open cv convention).
@@ -249,7 +251,7 @@ class Calibrator:
                 ret, corners = cv_corners(gray, alg='reg')
                 if not ret:
                     # Failed to find corners in image, to be consistent with previous implementation
-                    return None, None, False
+                    return None, False
 
             # Ensures the first corners is always at the top left of the image (neg x and positive y)
             # Can be turned off by setting orient variable to false.
@@ -275,7 +277,7 @@ class Calibrator:
 
             corners3d = np.asarray(corners3d)
             self.corners.append(corners3d)
-            return corners3d
+            return corners3d, ret
 
     def avg_corners(self, force=False):
         if self._mean_corners is None or force:
