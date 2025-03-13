@@ -445,7 +445,11 @@ class Camera(Stream):
         """
         if filename is None:
             filename = self.serial + "_cal.txt"
-        self._pose = o3d.core.Tensor(np.loadtxt(filename), device=DEVICE)
+        pose = np.loadtxt(filename)
+        if not pose.shape == (4, 4):
+            self.log.error(f"Error loading calibration: {calFile}. Does not conform to 4x4 matrix")
+            return
+        self._pose = o3d.core.Tensor(pose, device=DEVICE)
 
         return self._pose
 
@@ -860,7 +864,11 @@ class Recording(Stream):
         """
         if filename is None:
             filename = self.serial + "_cal.txt"
-        self._pose = o3d.core.Tensor(np.loadtxt(filename), device=DEVICE)
+        pose = np.loadtxt(filename)
+        if not pose.shape == (4, 4):
+            self.log.error(f"Error loading calibration: {calFile}. Does not conform to 4x4 matrix")
+            return
+        self._pose = o3d.core.Tensor(pose, device=DEVICE)
 
         return self._pose
 
@@ -1040,7 +1048,7 @@ class Recording(Stream):
             tries += 1
             if self._playback.current_status() == rs2.playback_status.playing:
                 delay = tries*sleepDelay
-                self.log.warning("Delayed by " + str(delay) + " sec to allow stream to settle")
+                self.log.warning("Delayed by " + str(tries) + " sec to allow stream to settle")
                 break
         if self._playback.current_status() == rs2.playback_status.playing:
             self._streamingFlag.set()
@@ -1269,7 +1277,7 @@ class DualRecording(DualStream):
 
         if self._pose is None:
             if self._stream1.pose is None or self._stream2.pose is None:
-                logging.warning("Tried to compute a dual point cloud of a stream that has not been calibrated.")
+                self.log.warning("Tried to compute a dual point cloud of a stream that has not been calibrated.")
                 try:
                     self.load_calibration()
                 except DualStreamError:

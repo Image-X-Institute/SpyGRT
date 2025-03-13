@@ -122,8 +122,8 @@ class Tracker:
     @roi.setter
     def roi(self, roi):
         self._roi = np.asarray(roi, dtype='float32')
-        self._box.set_min_bound = o3d.core.Tensor(self._roi[0], device=DEVICE)
-        self._box.set_max_bound = o3d.core.Tensor(self.roi[1], device=DEVICE)
+        self._box = o3d_geo.AxisAlignedBoundingBox(o3d.core.Tensor(self._roi[0], device=DEVICE),
+                                                   o3d.core.Tensor(self._roi[1], device=DEVICE))
 
     def select_roi(self):
         """
@@ -216,6 +216,30 @@ class Tracker:
         else:
             self._t_guess = result_icp.transformation
         return self._t_guess
+
+    def get_breathing_motion(self, source, axis=2):
+        """
+
+        Args:
+            source (open3D.t.Geometry.PointCloud): Point Cloud where the current motion is measured.
+            axis(int): Axis where the breathing motion is measured. Potential values are:
+                0: X axis (LR in IEC).
+                1: Y axis (SI in IEC).
+                2: Z axis (AP in IEC) - Default value.
+
+        Returns:
+            position: Average position of the points in the ROI (position along the axis defined by the axis variable)
+
+        """
+
+        box = o3d_geo.OrientedBoundingBox.create_from_axis_aligned_bounding_box(self._box)
+        pcd = source.crop(box)
+        self._source = pcd
+        points = pcd.point['positions']
+        position = points.mean(dim=0)[axis]
+        T = o3d.core.Tensor.eye(4,device=DEVICE)
+        T[axis, 3] = position
+        return T
 
     @staticmethod
     def isR_matrix(R):

@@ -80,7 +80,7 @@ class Calibrator:
         Access the 4x4 matrix representing the camera pose (result of the calibration).
 
         Returns:
-            pose (numpy ndarray): a 4x4 matrix representing the input camera to world transform
+            pose (o3d.core.Tensor): a 4x4 matrix representing the input camera to world transform
 
         """
         return self._pose
