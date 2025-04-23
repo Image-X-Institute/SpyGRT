@@ -592,11 +592,10 @@ class Camera(Stream):
         if warm_up:
             self.warmup()
 
-
 class Recording(Stream):
     """Class to handle the interaction with the Realsense API for realsense bag files."""
 
-    def __init__(self, device, filename=None):
+    def __init__(self, device, filename=None, repeat=False, ctx=rs2.context()):
         """
         Args:
             device(str): path a bag file containing a recording.
@@ -607,6 +606,8 @@ class Recording(Stream):
 
         # flag to indicate stream is active and warmed up or closed down properly
         self._streamingFlag = threading.Event()
+
+        self._ctx = ctx
 
         self._frame = None
 
@@ -643,12 +644,10 @@ class Recording(Stream):
         self._cfg = rs2.config()
 
         # Configure the camera with the default setting.
-        self._cfg.enable_device_from_file(device, False)
-
-        ctx = rs2.context()
+        self._cfg.enable_device_from_file(device, repeat)
 
         # Realsense device object to access device metadata.
-        self._device = ctx.load_device(device)
+        self._device = self._ctx.load_device(device)
 
         # pipeline that controls the acquisition of frames.
         self._pipe = None
@@ -1052,7 +1051,6 @@ class Recording(Stream):
                 break
         if self._playback.current_status() == rs2.playback_status.playing:
             self._streamingFlag.set()
-
 
 class DualStream(Stream, ABC):
     """ Abstract class to handle a stream from two devices (2 cameras or 2 recordings)."""
