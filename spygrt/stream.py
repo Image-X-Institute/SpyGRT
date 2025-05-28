@@ -1336,7 +1336,7 @@ class DualRecording(DualStream):
         self._pose = (pose1, pose2)
         return self._pose
 
-    def get_frames(self, encoding='o3d', filtering=True, filters=["threshold"]):
+    def get_frames(self, encoding='o3d', filtering=True, filters=["threshold"], timeout=5000):
         """
         Fetch new frame and ensure temporal alignment.
 
@@ -1344,6 +1344,7 @@ class DualRecording(DualStream):
             encoding(List[char]): a flag that determines the type of the returned frame.
             filtering(bool): Filters are turned on if set to True
             filters(List[str]): List of filters to be applied to the newly fetched frames
+            timeout(int): Time in ms before an error is generated if no frame is received.
 
         Returns:
             frame(Tuple): A tuple with a frame from each of the camera. The type of the returned frames depend on the
@@ -1351,8 +1352,8 @@ class DualRecording(DualStream):
 
         """
         # Getting new frames with a call  to the cameras.
-        f1 = self._stream1.get_frames(encoding=encoding, filtering=filtering, filters=filters)
-        f2 = self._stream2.get_frames(encoding=encoding, filtering=filtering, filters=filters)
+        f1 = self._stream1.get_frames(encoding=encoding, filtering=filtering, filters=filters,timeout=timeout)
+        f2 = self._stream2.get_frames(encoding=encoding, filtering=filtering, filters=filters,timeout=timeout)
 
         # Get the delay between the depth frames of each camera
         diff = self.stream2.timestamp - self.stream1.timestamp
