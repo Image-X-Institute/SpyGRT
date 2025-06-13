@@ -146,14 +146,15 @@ class Calibrator:
         # Obtaining the frame data in numpy format
         if type(frame[0]) == o3d.t.geometry.Image:
             im = frame[1].as_tensor().cpu().numpy()
-            color = frame[1].rgb_to_gray().as_tensor().cpu().numpy()
+            color = frame[1].as_tensor().cpu().numpy()
+            gray = cv.cvtColor(color, cv.COLOR_RGB2GRAY)
             depth = frame[0].as_tensor().cpu().numpy()
 
         else:
             depth = np.asanyarray(frame[0].get_data())
             color = np.asanyarray(frame[1].get_data())
 
-        ret, corners = cv_corners(color, alg='SB')
+        ret, corners = cv_corners(gray, alg='SB')
         if not ret:
             ret, corners = cv_corners(color, alg='reg')
         if not ret:
@@ -248,7 +249,7 @@ class Calibrator:
             ### This could be streamlined - could bug if corner finding  algorithm switches in each iteration ###
             ret, corners = cv_corners(gray, alg='SB')
             if not ret:
-                ret, corners = cv_corners(gray, alg='reg')
+                ret, corners = cv_corners(color, alg='reg')
                 if not ret:
                     # Failed to find corners in image, to be consistent with previous implementation
                     return None, False
@@ -467,9 +468,11 @@ def cv_corners(color, alg='reg', col=DEFAULT_COLUMN, rows=DEFAULT_ROW,):
     """
     corners = np.asarray([])
     if alg == 'reg':
-        ret, corners = cv.findChessboardCorners(color, [col, rows], corners)
+        ret, corners = cv.findChessboardCorners(color, [col, rows], corners,
+                                                flags=cv.CALIB_CB_ADAPTIVE_THRESH+cv.CALIB_CB_NORMALIZE_IMAGE)
         if ret:
-            corners = cv.cornerSubPix(color, corners, [11, 11], [-1, -1],
+            gray = cv.cvtColor(color, cv.COLOR_RGB2GRAY)
+            corners = cv.cornerSubPix(gray, corners, [11, 11], [-1, -1],
                                       (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.1))
     else:
         ret, corners = cv.findChessboardCornersSB(color, [col, rows], corners)
