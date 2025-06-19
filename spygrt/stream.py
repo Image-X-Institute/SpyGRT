@@ -1596,7 +1596,7 @@ class DualCamera(DualStream):
         self._pose = (pose1, pose2)
         return self._pose
 
-    def get_frames(self, encoding='o3d', filtering=True, filters=["threshold"]):
+    def get_frames(self, encoding='o3d', filtering=True, filters=["threshold"], timeout=5000):
         """
         Fetch new frame and ensure temporal alignment.
 
@@ -1611,8 +1611,8 @@ class DualCamera(DualStream):
 
         """
         # Getting new frames with a call  to the cameras.
-        f1 = self._stream1.get_frames(encoding=encoding, filtering=filtering, filters=filters)
-        f2 = self._stream2.get_frames(encoding=encoding, filtering=filtering, filters=filters)
+        f1 = self._stream1.get_frames(encoding=encoding, filtering=filtering, filters=filters, timeout=timeout)
+        f2 = self._stream2.get_frames(encoding=encoding, filtering=filtering, filters=filters, timeout=timeout)
 
         # This section will be obsolete when inter cam sync is enabled.
 

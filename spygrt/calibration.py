@@ -152,7 +152,9 @@ class Calibrator:
 
         else:
             depth = np.asanyarray(frame[0].get_data())
+            depth = depth.reshape(depth.shape[0], depth.shape[1], 1)
             color = np.asanyarray(frame[1].get_data())
+            gray = cv.cvtColor(color, cv.COLOR_RGB2GRAY)
 
         ret, corners = cv_corners(gray, alg='SB')
         if not ret:
